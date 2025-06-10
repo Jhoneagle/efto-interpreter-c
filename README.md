@@ -1,3 +1,7 @@
-https://craftinginterpreters.com/chunks-of-bytecode.html
+https://craftinginterpreters.com/a-virtual-machine.html#a-value-stack-manipulator
 
-14.6 Disassembling Chunks
+
+
+
+
+Testing suite ideas: https://github.com/munificent/craftinginterpreters/tree/master/test
