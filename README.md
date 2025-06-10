@@ -1,6 +1,6 @@
-https://craftinginterpreters.com/a-virtual-machine.html#a-value-stack-manipulator
+https://craftinginterpreters.com/scanning-on-demand.html
 
-
+16
 
 
 
