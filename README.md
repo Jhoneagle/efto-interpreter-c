@@ -1,6 +1,6 @@
-https://craftinginterpreters.com/hash-tables.html
+https://craftinginterpreters.com/global-variables.html
 
-20
+21
 
 
 
