@@ -1,6 +1,6 @@
-https://craftinginterpreters.com/scanning-on-demand.html
+https://craftinginterpreters.com/types-of-values.html
 
-16.2 A Token at a Time
+18
 
 
 
