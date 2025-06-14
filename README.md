@@ -1,6 +1,6 @@
 https://craftinginterpreters.com/global-variables.html
 
-21
+21.3 Reading Variables
 
 
 
