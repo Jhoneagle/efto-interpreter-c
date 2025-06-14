@@ -1,6 +1,6 @@
-https://craftinginterpreters.com/types-of-values.html
+https://craftinginterpreters.com/hash-tables.html
 
-18
+20
 
 
 
