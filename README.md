@@ -1,6 +1,6 @@
-https://craftinginterpreters.com/calls-and-functions.html
+https://craftinginterpreters.com/closures.html
 
-24.4 Function Declarations
+25
 
 
 
