@@ -1,6 +1,6 @@
-https://craftinginterpreters.com/jumping-back-and-forth.html
+https://craftinginterpreters.com/calls-and-functions.html
 
-23
+24.4 Function Declarations
 
 
 
