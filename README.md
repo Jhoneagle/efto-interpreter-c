@@ -1,6 +1,6 @@
-https://craftinginterpreters.com/global-variables.html
+https://craftinginterpreters.com/jumping-back-and-forth.html
 
-21.3 Reading Variables
+23
 
 
 
