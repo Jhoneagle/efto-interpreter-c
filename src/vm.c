@@ -315,7 +315,7 @@ InterpretResult interpret(const char* source) {
   if (function == NULL) return INTERPRET_COMPILE_ERROR;
 
   push(OBJ_VAL(function));
-  call(function, 0);
+  if (!call(function, 0)) return INTERPRET_RUNTIME_ERROR;
 
   return run();
 }
