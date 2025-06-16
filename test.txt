@@ -1,14 +1,26 @@
-var aa = 2;
-var bb = 3;
-var cc = 4;
+var globalOne;
+var globalTwo;
 
-print (3 + 2) / 4;
+fun main() {
+  var bb = "Moi";
+  {
+    var a = " maailma!";
+    fun one() {
+      print bb + a;
+      bb = "Hello";
+    }
+    globalOne = one;
+  }
 
-fun fib(n) {
-  if (n < 2) return n;
-  return fib(n - 2) + fib(n - 1);
+  {
+    var a = " world!";
+    fun two() {
+      print bb + a;
+    }
+    globalTwo = two;
+  }
 }
 
-var start = clock();
-print fib(35);
-print clock() - start;
+main();
+globalOne();
+globalTwo();

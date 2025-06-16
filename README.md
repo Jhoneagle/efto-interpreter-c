@@ -1,6 +1,6 @@
-https://craftinginterpreters.com/closures.html
+https://craftinginterpreters.com/garbage-collection.html
 
-25
+26.3 Marking the Roots
 
 
 
