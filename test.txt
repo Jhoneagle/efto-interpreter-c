@@ -1,26 +1,6 @@
-var globalOne;
-var globalTwo;
+class Pair {}
 
-fun main() {
-  var bb = "Moi";
-  {
-    var a = " maailma!";
-    fun one() {
-      print bb + a;
-      bb = "Hello";
-    }
-    globalOne = one;
-  }
-
-  {
-    var a = " world!";
-    fun two() {
-      print bb + a;
-    }
-    globalTwo = two;
-  }
-}
-
-main();
-globalOne();
-globalTwo();
+var pair = Pair();
+pair.first = 1;
+pair.second = 2;
+print pair.first + pair.second; // 3.
