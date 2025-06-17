@@ -1,6 +1,6 @@
-https://craftinginterpreters.com/garbage-collection.html
+https://craftinginterpreters.com/classes-and-instances.html
 
-26.3 Marking the Roots
+27
 
 
 
