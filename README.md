@@ -1,6 +1,6 @@
-https://craftinginterpreters.com/superclasses.html
+https://craftinginterpreters.com/optimization.html
 
-29
+30
 
 
 
