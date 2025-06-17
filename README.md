@@ -1,6 +1,6 @@
-https://craftinginterpreters.com/optimization.html
+https://craftinginterpreters.com/optimization.html#where-to-next
 
-30
+30.4 Where to Next
 
 
 
