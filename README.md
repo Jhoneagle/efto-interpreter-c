@@ -1,6 +1,6 @@
-https://craftinginterpreters.com/methods-and-initializers.html
+https://craftinginterpreters.com/superclasses.html
 
-28
+29
 
 
 
