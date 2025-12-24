@@ -1,9 +1,4 @@
-https://craftinginterpreters.com/optimization.html#where-to-next
+# Interpreter for Efto coding language
 
-30.4 Where to Next
+All the code until [dummy release](https://github.com/Jhoneagle/efto-interpreter-c/releases/tag/guided-learning) are intellectual property of a book called [Crafting interpreters by Robert Nystrom](https://craftinginterpreters.com/). This repository contains the design from second half of the book that was done in c in order to deepen the understanding of how interpreters are truly implemented in the industry. My learning experience from following the first half of the book can be found in [here](https://github.com/Jhoneagle/efto-interpreter-java). Any and all code changes after [dummy release](https://github.com/Jhoneagle/efto-interpreter-c/releases/tag/guided-learning) will be unrelated to the book, and thus more or less my personal adventures in the world of interpreters. 
 
-
-
-
-
-Testing suite ideas: https://github.com/munificent/craftinginterpreters/tree/master/test
