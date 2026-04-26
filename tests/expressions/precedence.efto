@@ -1,0 +1,8 @@
+// Operator precedence.
+print 2 + 3 * 4;          // expect: 14
+print 2 * 3 + 4;          // expect: 10
+print (2 + 3) * 4;        // expect: 20
+print -(2 + 3);           // expect: -5
+print !true == false;     // expect: true
+print 1 + 2 == 3;         // expect: true
+print 1 < 2 == true;      // expect: true

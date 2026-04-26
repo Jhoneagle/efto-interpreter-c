@@ -1,0 +1,8 @@
+// Boolean literals and logical not.
+print true;    // expect: true
+print false;   // expect: false
+print !true;   // expect: false
+print !false;  // expect: true
+print !nil;    // expect: true
+print !0;      // expect: false
+print !"";     // expect: false

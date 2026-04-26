@@ -1,0 +1,11 @@
+// Instance fields: get and set.
+class Point {}
+
+var p = Point();
+p.x = 10;
+p.y = 20;
+print p.x; // expect: 10
+print p.y; // expect: 20
+
+p.x = 30;
+print p.x; // expect: 30

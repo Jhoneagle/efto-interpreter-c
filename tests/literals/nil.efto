@@ -1,0 +1,6 @@
+// Nil value.
+print nil;          // expect: nil
+print nil == nil;   // expect: true
+print nil == false; // expect: false
+var x;
+print x;            // expect: nil

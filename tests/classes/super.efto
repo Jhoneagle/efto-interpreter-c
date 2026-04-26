@@ -1,0 +1,32 @@
+// Super method calls.
+class Base {
+  greet() {
+    return "base";
+  }
+}
+
+class Derived < Base {
+  greet() {
+    return super.greet() + " derived";
+  }
+}
+
+print Derived().greet(); // expect: base derived
+
+// Super with init.
+class A {
+  init() {
+    this.x = 1;
+  }
+}
+
+class B < A {
+  init() {
+    super.init();
+    this.y = 2;
+  }
+}
+
+var b = B();
+print b.x; // expect: 1
+print b.y; // expect: 2

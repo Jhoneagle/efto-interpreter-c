@@ -1,0 +1,4 @@
+// clock() returns a number.
+var t = clock();
+print t >= 0;    // expect: true
+print t < 10000; // expect: true

@@ -1,0 +1,20 @@
+// Functions as first-class values.
+fun identity(x) {
+  return x;
+}
+
+print identity(42);     // expect: 42
+print identity;         // expect: <fn identity>
+
+fun apply(f, x) {
+  return f(x);
+}
+
+fun double(n) {
+  return n * 2;
+}
+print apply(double, 5); // expect: 10
+
+// Functions stored in variables.
+var fn = double;
+print fn(3);            // expect: 6

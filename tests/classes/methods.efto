@@ -1,0 +1,14 @@
+// Method calls.
+class Math {
+  square(n) {
+    return n * n;
+  }
+
+  add(a, b) {
+    return a + b;
+  }
+}
+
+var m = Math();
+print m.square(4);  // expect: 16
+print m.add(2, 3);  // expect: 5

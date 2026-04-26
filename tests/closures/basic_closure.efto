@@ -1,0 +1,9 @@
+// Basic closure captures outer variable.
+fun outer() {
+  var x = "outside";
+  fun inner() {
+    print x;
+  }
+  inner();
+}
+outer(); // expect: outside

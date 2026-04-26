@@ -1,0 +1,11 @@
+// Two closures share the same captured variable.
+fun makePair() {
+  var x = 0;
+  fun get() { return x; }
+  fun set(value) { x = value; }
+
+  print get(); // expect: 0
+  set(42);
+  print get(); // expect: 42
+}
+makePair();

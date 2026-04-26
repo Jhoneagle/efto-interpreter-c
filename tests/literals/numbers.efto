@@ -1,0 +1,7 @@
+// Number literals.
+print 0;       // expect: 0
+print 123;     // expect: 123
+print 1.5;     // expect: 1.5
+print 0.25;    // expect: 0.25
+print -0;      // expect: -0
+print 1000;    // expect: 1000

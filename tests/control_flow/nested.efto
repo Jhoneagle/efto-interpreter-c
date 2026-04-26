@@ -1,0 +1,9 @@
+// Nested loops and conditions.
+for (var i = 0; i < 3; i = i + 1) {
+  for (var j = 0; j < 2; j = j + 1) {
+    if (i == 1 and j == 1) {
+      print "found";
+    }
+  }
+}
+// expect: found

@@ -1,0 +1,16 @@
+// This binding in methods.
+class Person {
+  init() {
+    this.name = "Alice";
+  }
+
+  greet() {
+    print "Hello, " + this.name;
+  }
+}
+
+var p = Person();
+p.greet(); // expect: Hello, Alice
+
+p.name = "Bob";
+p.greet(); // expect: Hello, Bob

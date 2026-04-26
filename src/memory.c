@@ -9,9 +9,7 @@
 #include "debug.h"
 #endif
 
-#ifdef DEBUG_STRESS_GC
 static void collectGarbage();
-#endif
 
 #define GC_HEAP_GROW_FACTOR 2
 

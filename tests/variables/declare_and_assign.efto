@@ -1,0 +1,12 @@
+// Variable declaration and assignment.
+var x = 10;
+print x;        // expect: 10
+
+var y;
+print y;        // expect: nil
+
+y = 20;
+print y;        // expect: 20
+
+x = x + 1;
+print x;        // expect: 11

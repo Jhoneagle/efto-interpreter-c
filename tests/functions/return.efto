@@ -1,0 +1,16 @@
+// Return values.
+fun square(n) {
+  return n * n;
+}
+print square(5); // expect: 25
+
+// Implicit nil return.
+fun nothing() {}
+print nothing(); // expect: nil
+
+// Early return.
+fun early() {
+  return "done";
+  print "unreachable";
+}
+print early(); // expect: done

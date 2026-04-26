@@ -1,0 +1,10 @@
+// Basic function declaration and call.
+fun greet() {
+  print "hello";
+}
+greet(); // expect: hello
+
+fun add(a, b) {
+  print a + b;
+}
+add(1, 2); // expect: 3

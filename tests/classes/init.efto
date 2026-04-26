@@ -1,0 +1,20 @@
+// Constructor (init) and implicit this return.
+class Vec {
+  init(x, y) {
+    this.x = x;
+    this.y = y;
+  }
+
+  length() {
+    return this.x + this.y;
+  }
+}
+
+var v = Vec(3, 4);
+print v.x;        // expect: 3
+print v.y;        // expect: 4
+print v.length(); // expect: 7
+
+// init returns the instance.
+var v2 = Vec(1, 2);
+print v2.x; // expect: 1

@@ -1,0 +1,9 @@
+// Basic arithmetic operations.
+print 1 + 2;        // expect: 3
+print 5 - 3;        // expect: 2
+print 2 * 3;        // expect: 6
+print 10 / 4;       // expect: 2.5
+print 1 + 2 * 3;    // expect: 7
+print (1 + 2) * 3;  // expect: 9
+print 5 - 2 - 1;    // expect: 2
+print 8 / 2 / 2;    // expect: 2

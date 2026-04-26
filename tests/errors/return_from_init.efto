@@ -1,0 +1,6 @@
+// Cannot return a value from init.
+class Foo {
+  init() {
+    return "bad"; // expect error: [line 4] Error at 'return': Can't return a value from an initializer.
+  }
+}

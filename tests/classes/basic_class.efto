@@ -1,0 +1,5 @@
+// Basic class declaration and instantiation.
+class Foo {}
+var foo = Foo();
+print foo;  // expect: Foo instance
+print Foo;  // expect: Foo

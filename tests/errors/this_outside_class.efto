@@ -1,0 +1,2 @@
+// Cannot use 'this' outside of a class.
+print this; // expect error: [line 2] Error at 'this': Can't use 'this' outside of a class.

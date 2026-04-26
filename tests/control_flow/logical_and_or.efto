@@ -1,0 +1,21 @@
+// Logical and/or with short-circuit evaluation.
+print true and true;    // expect: true
+print true and false;   // expect: false
+print false and true;   // expect: false
+print false and false;  // expect: false
+
+print true or true;     // expect: true
+print true or false;    // expect: true
+print false or true;    // expect: true
+print false or false;   // expect: false
+
+// Short circuit: and returns left if falsey, right otherwise.
+print false and "ok";   // expect: false
+print nil and "ok";     // expect: nil
+print "a" and "b";      // expect: b
+
+// Short circuit: or returns left if truthy, right otherwise.
+print true or "ok";     // expect: true
+print "a" or "b";       // expect: a
+print nil or "ok";      // expect: ok
+print false or nil;     // expect: nil

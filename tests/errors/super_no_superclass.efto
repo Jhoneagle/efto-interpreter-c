@@ -1,0 +1,6 @@
+// Cannot use 'super' in a class with no superclass.
+class Foo {
+  bar() {
+    super.baz(); // expect error: [line 4] Error at 'super': Can't use 'super' in a class with no superclass.
+  }
+}

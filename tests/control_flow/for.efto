@@ -1,0 +1,21 @@
+// For loop.
+for (var i = 0; i < 5; i = i + 1) {
+  print i;
+}
+// expect: 0
+// expect: 1
+// expect: 2
+// expect: 3
+// expect: 4
+
+// For loop with no initializer.
+var j = 0;
+for (; j < 3; j = j + 1) {
+  print j;
+}
+// expect: 0
+// expect: 1
+// expect: 2
+
+// For loop variable is scoped.
+for (var k = 0; k < 1; k = k + 1) {}

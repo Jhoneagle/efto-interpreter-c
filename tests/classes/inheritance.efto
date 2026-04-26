@@ -1,0 +1,20 @@
+// Single inheritance.
+class Animal {
+  speak() {
+    print "...";
+  }
+}
+
+class Dog < Animal {
+  speak() {
+    print "woof";
+  }
+}
+
+class Cat < Animal {}
+
+var dog = Dog();
+dog.speak(); // expect: woof
+
+var cat = Cat();
+cat.speak(); // expect: ...

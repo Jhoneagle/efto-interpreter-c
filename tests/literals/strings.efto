@@ -1,0 +1,5 @@
+// String literals.
+print "hello";        // expect: hello
+print "";             // expect:
+print "hello world";  // expect: hello world
+print "123";          // expect: 123

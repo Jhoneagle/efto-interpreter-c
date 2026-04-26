@@ -1,0 +1,2 @@
+// Cannot negate a non-number.
+print -"s"; // expect runtime error: Operand must be a number.

@@ -1,0 +1,16 @@
+// Multiple levels of closure nesting.
+fun outer() {
+  var a = "a";
+  fun middle() {
+    var b = "b";
+    fun inner() {
+      print a;
+      print b;
+    }
+    inner();
+  }
+  middle();
+}
+outer();
+// expect: a
+// expect: b

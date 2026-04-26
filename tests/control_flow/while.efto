@@ -1,0 +1,16 @@
+// While loop.
+var i = 0;
+while (i < 5) {
+  print i;
+  i = i + 1;
+}
+// expect: 0
+// expect: 1
+// expect: 2
+// expect: 3
+// expect: 4
+
+// While with false condition never executes.
+while (false) {
+  print "bad";
+}

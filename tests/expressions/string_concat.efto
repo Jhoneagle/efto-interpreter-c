@@ -1,0 +1,6 @@
+// String concatenation.
+print "hello" + " " + "world";  // expect: hello world
+print "a" + "b";                // expect: ab
+print "" + "x";                 // expect: x
+print "x" + "";                 // expect: x
+print "" + "";                  // expect:
