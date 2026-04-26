@@ -29,10 +29,10 @@ INTERPRETER_PATHS = [
     "build/interpreter",
 ]
 
-RE_EXPECT_OUTPUT = re.compile(r"// expect: (.*)$")
-RE_EXPECT_ERROR = re.compile(r"// expect error: (.*)$")
-RE_EXPECT_RUNTIME_ERROR = re.compile(r"// expect runtime error: (.*)$")
-RE_EXPECT_EXIT = re.compile(r"// expect exit: (\d+)$")
+RE_EXPECT_OUTPUT = re.compile(r"// expect:\s?(.*)$")
+RE_EXPECT_ERROR = re.compile(r"// expect error:\s?(.*)$")
+RE_EXPECT_RUNTIME_ERROR = re.compile(r"// expect runtime error:\s?(.*)$")
+RE_EXPECT_EXIT = re.compile(r"// expect exit:\s*(\d+)$")
 
 TIMEOUT = 10  # seconds per test
 
