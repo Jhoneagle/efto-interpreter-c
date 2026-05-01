@@ -1,0 +1,36 @@
+// String length property.
+print "hello".length;      // expect: 5
+print "".length;           // expect: 0
+
+// substring method.
+print "hello world".substring(0, 5);  // expect: hello
+print "hello world".substring(6, 11); // expect: world
+print "abcdef".substring(2, 4);       // expect: cd
+
+// indexOf method.
+print "hello world".indexOf("world"); // expect: 6
+print "hello world".indexOf("xyz");   // expect: -1
+print "hello world".indexOf("hello"); // expect: 0
+
+// toUpper and toLower.
+print "hello".toUpper();   // expect: HELLO
+print "WORLD".toLower();   // expect: world
+print "MiXeD".toUpper();   // expect: MIXED
+print "MiXeD".toLower();   // expect: mixed
+
+// trim method.
+print "  hello  ".trim();  // expect: hello
+print "no trim".trim();    // expect: no trim
+
+// split method.
+var parts = "a,b,c".split(",");
+print parts.length;  // expect: 3
+print parts[0];      // expect: a
+print parts[1];      // expect: b
+print parts[2];      // expect: c
+
+// split with empty delimiter splits into chars.
+var chars = "hi".split("");
+print chars.length;  // expect: 2
+print chars[0];      // expect: h
+print chars[1];      // expect: i

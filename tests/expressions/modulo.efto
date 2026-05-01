@@ -1,0 +1,10 @@
+// Modulo operator.
+print 10 % 3;       // expect: 1
+print 7 % 2;        // expect: 1
+print 8 % 4;        // expect: 0
+print 10 % 10;      // expect: 0
+print 15 % 4;       // expect: 3
+
+// Modulo with precedence (same as * and /).
+print 10 + 7 % 3;   // expect: 11
+print (10 + 7) % 3; // expect: 2

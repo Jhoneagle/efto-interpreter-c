@@ -1,0 +1,38 @@
+// Break in while loop.
+var i = 0;
+while (i < 10) {
+  if (i == 3) break;
+  print i;
+  i = i + 1;
+}
+// expect: 0
+// expect: 1
+// expect: 2
+
+// Break in for loop.
+for (var j = 0; j < 10; j = j + 1) {
+  if (j == 2) break;
+  print j;
+}
+// expect: 0
+// expect: 1
+
+// Break in for-each loop.
+var items = [10, 20, 30, 40, 50];
+for (var item in items) {
+  if (item == 30) break;
+  print item;
+}
+// expect: 10
+// expect: 20
+
+// Break in nested loop only breaks inner.
+for (var x = 0; x < 3; x = x + 1) {
+  for (var y = 0; y < 3; y = y + 1) {
+    if (y == 1) break;
+    print x * 10 + y;
+  }
+}
+// expect: 0
+// expect: 10
+// expect: 20

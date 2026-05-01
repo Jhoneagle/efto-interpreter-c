@@ -225,6 +225,7 @@ static void markRoots() {
   markObject((Obj*)vm.initString);
   markObject((Obj*)vm.arrayMethods);
   markObject((Obj*)vm.mapMethods);
+  markObject((Obj*)vm.stringMethods);
 }
 
 static void traceReferences() {

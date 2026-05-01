@@ -1,0 +1,2 @@
+// Continue outside a loop is an error.
+continue; // expect error: Can't use 'continue' outside of a loop.

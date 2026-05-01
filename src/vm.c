@@ -1,3 +1,5 @@
+#include <ctype.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -117,6 +119,139 @@ static bool mapRemove(Value receiver, int argCount, Value* args,
   return true;
 }
 
+// --- String native methods ---
+
+static bool stringSubstring(Value receiver, int argCount, Value* args,
+                            Value* result) {
+  ObjString* str = AS_STRING(receiver);
+  if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+    runtimeError("Substring arguments must be numbers.");
+    return false;
+  }
+  int start = (int)AS_NUMBER(args[0]);
+  int end = (int)AS_NUMBER(args[1]);
+  if (start < 0) start = 0;
+  if (end > str->length) end = str->length;
+  if (start > end) start = end;
+  *result = OBJ_VAL(copyString(str->chars + start, end - start));
+  return true;
+}
+
+static bool stringIndexOf(Value receiver, int argCount, Value* args,
+                           Value* result) {
+  ObjString* str = AS_STRING(receiver);
+  if (!IS_STRING(args[0])) {
+    runtimeError("indexOf argument must be a string.");
+    return false;
+  }
+  ObjString* search = AS_STRING(args[0]);
+  char* found = strstr(str->chars, search->chars);
+  *result = NUMBER_VAL(found == NULL ? -1 : (double)(found - str->chars));
+  return true;
+}
+
+static bool stringToUpper(Value receiver, int argCount, Value* args,
+                           Value* result) {
+  ObjString* str = AS_STRING(receiver);
+  char* upper = ALLOCATE(char, str->length + 1);
+  for (int i = 0; i < str->length; i++) {
+    upper[i] = (char)toupper((unsigned char)str->chars[i]);
+  }
+  upper[str->length] = '\0';
+  *result = OBJ_VAL(takeString(upper, str->length));
+  return true;
+}
+
+static bool stringToLower(Value receiver, int argCount, Value* args,
+                           Value* result) {
+  ObjString* str = AS_STRING(receiver);
+  char* lower = ALLOCATE(char, str->length + 1);
+  for (int i = 0; i < str->length; i++) {
+    lower[i] = (char)tolower((unsigned char)str->chars[i]);
+  }
+  lower[str->length] = '\0';
+  *result = OBJ_VAL(takeString(lower, str->length));
+  return true;
+}
+
+static bool stringSplit(Value receiver, int argCount, Value* args,
+                        Value* result) {
+  ObjString* str = AS_STRING(receiver);
+  if (!IS_STRING(args[0])) {
+    runtimeError("Split delimiter must be a string.");
+    return false;
+  }
+  ObjString* delim = AS_STRING(args[0]);
+
+  ObjArray* array = newArray();
+  push(OBJ_VAL(array)); // GC protection
+
+  if (delim->length == 0) {
+    for (int i = 0; i < str->length; i++) {
+      writeValueArray(&array->elements,
+                      OBJ_VAL(copyString(str->chars + i, 1)));
+    }
+  } else {
+    const char* start = str->chars;
+    const char* end = str->chars + str->length;
+    const char* pos;
+    while ((pos = strstr(start, delim->chars)) != NULL) {
+      writeValueArray(&array->elements,
+                      OBJ_VAL(copyString(start, (int)(pos - start))));
+      start = pos + delim->length;
+    }
+    writeValueArray(&array->elements,
+                    OBJ_VAL(copyString(start, (int)(end - start))));
+  }
+
+  pop(); // remove GC protection
+  *result = OBJ_VAL(array);
+  return true;
+}
+
+static bool stringTrim(Value receiver, int argCount, Value* args,
+                       Value* result) {
+  ObjString* str = AS_STRING(receiver);
+  const char* start = str->chars;
+  const char* end = str->chars + str->length;
+
+  while (start < end && (*start == ' ' || *start == '\t' ||
+                          *start == '\r' || *start == '\n')) start++;
+  while (end > start && (end[-1] == ' ' || end[-1] == '\t' ||
+                          end[-1] == '\r' || end[-1] == '\n')) end--;
+
+  *result = OBJ_VAL(copyString(start, (int)(end - start)));
+  return true;
+}
+
+// --- Native functions ---
+
+static Value typeNative(int argCount, Value* args) {
+  if (argCount == 0) return OBJ_VAL(copyString("nil", 3));
+  Value value = args[0];
+
+  if (IS_NIL(value))    return OBJ_VAL(copyString("nil", 3));
+  if (IS_BOOL(value))   return OBJ_VAL(copyString("bool", 4));
+  if (IS_NUMBER(value)) return OBJ_VAL(copyString("number", 6));
+
+  if (IS_OBJ(value)) {
+    switch (OBJ_TYPE(value)) {
+      case OBJ_STRING:        return OBJ_VAL(copyString("string", 6));
+      case OBJ_ARRAY:         return OBJ_VAL(copyString("array", 5));
+      case OBJ_MAP:           return OBJ_VAL(copyString("map", 3));
+      case OBJ_CLASS:         return OBJ_VAL(copyString("class", 5));
+      case OBJ_INSTANCE:      return OBJ_VAL(copyString("instance", 8));
+      case OBJ_FUNCTION:
+      case OBJ_CLOSURE:
+      case OBJ_NATIVE:
+      case OBJ_NATIVE_METHOD:
+      case OBJ_BOUND_METHOD:  return OBJ_VAL(copyString("function", 8));
+      default: break;
+    }
+  }
+  return OBJ_VAL(copyString("unknown", 7));
+}
+
 static void resetStack() {
   vm.stackTop = vm.stack;
   vm.frameCount = 0;
@@ -163,6 +298,39 @@ static void defineNativeMethod(ObjClass* klass, const char* name,
   pop();
 }
 
+static ObjString* stringify(Value value) {
+  if (IS_STRING(value)) return AS_STRING(value);
+
+  if (IS_NIL(value)) return copyString("nil", 3);
+  if (IS_BOOL(value)) return AS_BOOL(value) ?
+      copyString("true", 4) : copyString("false", 5);
+
+  if (IS_NUMBER(value)) {
+    char buffer[24];
+    int len = snprintf(buffer, sizeof(buffer), "%g", AS_NUMBER(value));
+    return copyString(buffer, len);
+  }
+
+  if (IS_OBJ(value)) {
+    switch (OBJ_TYPE(value)) {
+      case OBJ_CLASS:
+        return AS_CLASS(value)->name;
+      case OBJ_INSTANCE: {
+        ObjString* name = AS_INSTANCE(value)->klass->name;
+        int totalLen = name->length + 9;
+        char* chars = ALLOCATE(char, totalLen + 1);
+        memcpy(chars, name->chars, name->length);
+        memcpy(chars + name->length, " instance", 9);
+        chars[totalLen] = '\0';
+        return takeString(chars, totalLen);
+      }
+      default:
+        return copyString("<object>", 8);
+    }
+  }
+  return copyString("<unknown>", 9);
+}
+
 void initVM() {
     resetStack();
     vm.objects = NULL;
@@ -193,7 +361,17 @@ void initVM() {
     defineNativeMethod(vm.mapMethods, "values", mapValues, 0);
     defineNativeMethod(vm.mapMethods, "remove", mapRemove, 1);
 
+    vm.stringMethods = NULL;
+    vm.stringMethods = newClass(copyString("String", 6));
+    defineNativeMethod(vm.stringMethods, "substring", stringSubstring, 2);
+    defineNativeMethod(vm.stringMethods, "indexOf", stringIndexOf, 1);
+    defineNativeMethod(vm.stringMethods, "toUpper", stringToUpper, 0);
+    defineNativeMethod(vm.stringMethods, "toLower", stringToLower, 0);
+    defineNativeMethod(vm.stringMethods, "split", stringSplit, 1);
+    defineNativeMethod(vm.stringMethods, "trim", stringTrim, 0);
+
     defineNative("clock", clockNative);
+    defineNative("type", typeNative);
 }
 
 void freeVM() {
@@ -308,6 +486,10 @@ static bool invokeFromClass(ObjClass* klass, ObjString* name, int argCount) {
 
 static bool invoke(ObjString* name, int argCount) {
   Value receiver = peek(argCount);
+
+  if (IS_STRING(receiver)) {
+    return invokeFromClass(vm.stringMethods, name, argCount);
+  }
 
   if (IS_ARRAY(receiver)) {
     return invokeFromClass(vm.arrayMethods, name, argCount);
@@ -504,6 +686,21 @@ static InterpretResult run() {
         break;
       }
       case OP_GET_PROPERTY: {
+        if (IS_STRING(peek(0))) {
+          ObjString* string = AS_STRING(peek(0));
+          ObjString* name = READ_STRING();
+
+          if (name->length == 6 &&
+              memcmp(name->chars, "length", 6) == 0) {
+            pop();
+            push(NUMBER_VAL(string->length));
+            break;
+          }
+
+          runtimeError("String has no property '%s'.", name->chars);
+          return INTERPRET_RUNTIME_ERROR;
+        }
+
         if (IS_ARRAY(peek(0))) {
           ObjArray* array = AS_ARRAY(peek(0));
           ObjString* name = READ_STRING();
@@ -601,6 +798,16 @@ static InterpretResult run() {
       case OP_SUBTRACT: BINARY_OP(NUMBER_VAL, -); break;
       case OP_MULTIPLY: BINARY_OP(NUMBER_VAL, *); break;
       case OP_DIVIDE:   BINARY_OP(NUMBER_VAL, /); break;
+      case OP_MODULO: {
+        if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) {
+          runtimeError("Operands must be numbers.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        double b = AS_NUMBER(pop());
+        double a = AS_NUMBER(pop());
+        push(NUMBER_VAL(fmod(a, b)));
+        break;
+      }
       case OP_NOT:
         push(BOOL_VAL(isFalsey(pop())));
         break;
@@ -774,6 +981,16 @@ static InterpretResult run() {
           }
         }
 
+        break;
+      }
+      case OP_DUP: {
+        uint8_t offset = READ_BYTE();
+        push(peek(offset));
+        break;
+      }
+      case OP_STRINGIFY: {
+        Value value = pop();
+        push(OBJ_VAL(stringify(value)));
         break;
       }
       case OP_CLOSE_UPVALUE:

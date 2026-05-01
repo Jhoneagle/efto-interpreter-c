@@ -1,0 +1,37 @@
+// Basic string interpolation.
+var name = "world";
+print "hello ${name}!";
+// expect: hello world!
+
+// Interpolation with expressions.
+var x = 10;
+var y = 20;
+print "sum is ${x + y}";
+// expect: sum is 30
+
+// Multiple interpolations.
+var first = "John";
+var last = "Doe";
+print "${first} ${last}";
+// expect: John Doe
+
+// Interpolation with number.
+print "value: ${42}";
+// expect: value: 42
+
+// Interpolation with boolean.
+print "flag: ${true}";
+// expect: flag: true
+
+// Interpolation with nil.
+print "nothing: ${nil}";
+// expect: nothing: nil
+
+// Empty text before and after interpolation.
+var v = "test";
+print "${v}";
+// expect: test
+
+// Interpolation at start.
+print "${1 + 2} items";
+// expect: 3 items

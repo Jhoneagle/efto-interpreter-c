@@ -1,0 +1,31 @@
+// Continue in while loop.
+var i = 0;
+while (i < 5) {
+  i = i + 1;
+  if (i == 3) continue;
+  print i;
+}
+// expect: 1
+// expect: 2
+// expect: 4
+// expect: 5
+
+// Continue in for loop.
+for (var j = 0; j < 5; j = j + 1) {
+  if (j == 2) continue;
+  print j;
+}
+// expect: 0
+// expect: 1
+// expect: 3
+// expect: 4
+
+// Continue in for-each loop.
+var items = [10, 20, 30, 40];
+for (var item in items) {
+  if (item == 20) continue;
+  print item;
+}
+// expect: 10
+// expect: 30
+// expect: 40

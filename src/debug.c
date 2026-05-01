@@ -107,6 +107,8 @@ int disassembleInstruction(Chunk* chunk, int offset) {
       return simpleInstruction("OP_MULTIPLY", offset);
     case OP_DIVIDE:
       return simpleInstruction("OP_DIVIDE", offset);
+    case OP_MODULO:
+      return simpleInstruction("OP_MODULO", offset);
     case OP_NOT:
       return simpleInstruction("OP_NOT", offset);
     case OP_NEGATE:
@@ -133,6 +135,10 @@ int disassembleInstruction(Chunk* chunk, int offset) {
       return simpleInstruction("OP_INDEX_GET", offset);
     case OP_INDEX_SET:
       return simpleInstruction("OP_INDEX_SET", offset);
+    case OP_DUP:
+      return byteInstruction("OP_DUP", chunk, offset);
+    case OP_STRINGIFY:
+      return simpleInstruction("OP_STRINGIFY", offset);
     case OP_CLOSURE: {
       offset++;
       uint8_t constant = chunk->code[offset++];

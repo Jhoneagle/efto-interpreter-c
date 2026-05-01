@@ -1,0 +1,2 @@
+// Break outside a loop is an error.
+break; // expect error: Can't use 'break' outside of a loop.

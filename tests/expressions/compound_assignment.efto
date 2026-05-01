@@ -1,0 +1,27 @@
+// Compound assignment on variables.
+var a = 10;
+a += 5;
+print a;   // expect: 15
+a -= 3;
+print a;   // expect: 12
+a *= 2;
+print a;   // expect: 24
+a /= 4;
+print a;   // expect: 6
+a %= 4;
+print a;   // expect: 2
+
+// Compound assignment with strings.
+var s = "hello";
+s += " world";
+print s;   // expect: hello world
+
+// Compound assignment on array elements.
+var arr = [10, 20, 30];
+arr[1] += 5;
+print arr[1]; // expect: 25
+
+// Compound assignment on map values.
+var m = {"x": 100};
+m["x"] -= 50;
+print m["x"]; // expect: 50

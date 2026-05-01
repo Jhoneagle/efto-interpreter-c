@@ -74,9 +74,21 @@ typedef struct ClassCompiler {
   bool hasSuperclass;
 } ClassCompiler;
 
+typedef struct Loop {
+  struct Loop* enclosing;
+  int scopeDepth;
+  int breakJumps[256];
+  int breakCount;
+  int continueTarget;
+  bool hasContinueTarget;
+  int continueJumps[256];
+  int continueCount;
+} Loop;
+
 Parser parser;
 Compiler* current = NULL;
 ClassCompiler* currentClass = NULL;
+Loop* currentLoop = NULL;
 Chunk* compilingChunk;
 
 static Chunk* currentChunk() {
@@ -285,6 +297,7 @@ static void binary(bool canAssign) {
     case TOKEN_MINUS:         emitByte(OP_SUBTRACT); break;
     case TOKEN_STAR:          emitByte(OP_MULTIPLY); break;
     case TOKEN_SLASH:         emitByte(OP_DIVIDE); break;
+    case TOKEN_PERCENT:       emitByte(OP_MODULO); break;
     default: return; // Unreachable.
   }
 }
@@ -311,6 +324,51 @@ static void number(bool canAssign) {
 static void string(bool canAssign) {
   emitConstant(OBJ_VAL(copyString(parser.previous.start + 1,
                                   parser.previous.length - 2)));
+}
+
+static void interpolation(bool canAssign) {
+  // parser.previous is TOKEN_INTERPOLATION.
+  // Extract the text part: if starts with '"', skip it (initial part).
+  const char* text = parser.previous.start;
+  int len = parser.previous.length;
+  if (len > 0 && text[0] == '"') {
+    text++;
+    len--;
+  }
+
+  // Emit the leading text as a string constant.
+  emitConstant(OBJ_VAL(copyString(text, len)));
+
+  // Parse the interpolated expression.
+  expression();
+  emitByte(OP_STRINGIFY);
+  emitByte(OP_ADD);
+
+  // Handle subsequent interpolation parts.
+  while (match(TOKEN_INTERPOLATION)) {
+    const char* partText = parser.previous.start;
+    int partLen = parser.previous.length;
+    if (partLen > 0) {
+      emitConstant(OBJ_VAL(copyString(partText, partLen)));
+      emitByte(OP_ADD);
+    }
+    expression();
+    emitByte(OP_STRINGIFY);
+    emitByte(OP_ADD);
+  }
+
+  // Final string part (TOKEN_STRING from string continuation).
+  consume(TOKEN_STRING, "Expect end of interpolated string.");
+  const char* endText = parser.previous.start;
+  int endLen = parser.previous.length;
+  // The continuation TOKEN_STRING includes the closing '"'.
+  if (endLen > 0 && endText[endLen - 1] == '"') {
+    endLen--;
+  }
+  if (endLen > 0) {
+    emitConstant(OBJ_VAL(copyString(endText, endLen)));
+    emitByte(OP_ADD);
+  }
 }
 
 static uint8_t identifierConstant(Token* name) {
@@ -375,6 +433,23 @@ static int resolveUpvalue(Compiler* compiler, Token* name) {
   return -1;
 }
 
+static bool isCompoundAssign(TokenType type) {
+  return type == TOKEN_PLUS_EQUAL || type == TOKEN_MINUS_EQUAL ||
+         type == TOKEN_STAR_EQUAL || type == TOKEN_SLASH_EQUAL ||
+         type == TOKEN_PERCENT_EQUAL;
+}
+
+static uint8_t compoundOp(TokenType type) {
+  switch (type) {
+    case TOKEN_PLUS_EQUAL:    return OP_ADD;
+    case TOKEN_MINUS_EQUAL:   return OP_SUBTRACT;
+    case TOKEN_STAR_EQUAL:    return OP_MULTIPLY;
+    case TOKEN_SLASH_EQUAL:   return OP_DIVIDE;
+    case TOKEN_PERCENT_EQUAL: return OP_MODULO;
+    default: return 0;
+  }
+}
+
 static void namedVariable(Token name, bool canAssign) {
   uint8_t getOp, setOp;
   int arg = resolveLocal(current, &name);
@@ -389,9 +464,16 @@ static void namedVariable(Token name, bool canAssign) {
     getOp = OP_GET_GLOBAL;
     setOp = OP_SET_GLOBAL;
   }
-  
+
   if (canAssign && match(TOKEN_EQUAL)) {
     expression();
+    emitBytes(setOp, (uint8_t)arg);
+  } else if (canAssign && isCompoundAssign(parser.current.type)) {
+    TokenType opType = parser.current.type;
+    advance();
+    emitBytes(getOp, (uint8_t)arg);
+    expression();
+    emitByte(compoundOp(opType));
     emitBytes(setOp, (uint8_t)arg);
   } else {
     emitBytes(getOp, (uint8_t)arg);
@@ -477,6 +559,14 @@ static void dot(bool canAssign) {
   if (canAssign && match(TOKEN_EQUAL)) {
     expression();
     emitBytes(OP_SET_PROPERTY, name);
+  } else if (canAssign && isCompoundAssign(parser.current.type)) {
+    TokenType opType = parser.current.type;
+    advance();
+    emitBytes(OP_DUP, 0);
+    emitBytes(OP_GET_PROPERTY, name);
+    expression();
+    emitByte(compoundOp(opType));
+    emitBytes(OP_SET_PROPERTY, name);
   } else if (match(TOKEN_LEFT_PAREN)) {
     uint8_t argCount = argumentList();
     emitBytes(OP_INVOKE, name);
@@ -558,6 +648,16 @@ static void subscript(bool canAssign) {
   if (canAssign && match(TOKEN_EQUAL)) {
     expression();
     emitByte(OP_INDEX_SET);
+  } else if (canAssign && isCompoundAssign(parser.current.type)) {
+    TokenType opType = parser.current.type;
+    advance();
+    // Stack: [receiver, index]. Duplicate both for GET then SET.
+    emitBytes(OP_DUP, 1); // copy receiver
+    emitBytes(OP_DUP, 1); // copy index
+    emitByte(OP_INDEX_GET);
+    expression();
+    emitByte(compoundOp(opType));
+    emitByte(OP_INDEX_SET);
   } else {
     emitByte(OP_INDEX_GET);
   }
@@ -575,6 +675,7 @@ ParseRule rules[] = {
   [TOKEN_SEMICOLON]     = {NULL,     NULL,   PREC_NONE},
   [TOKEN_SLASH]         = {NULL,     binary, PREC_FACTOR},
   [TOKEN_STAR]          = {NULL,     binary, PREC_FACTOR},
+  [TOKEN_PERCENT]       = {NULL,     binary, PREC_FACTOR},
   [TOKEN_BANG]          = {unary,     NULL,   PREC_NONE},
   [TOKEN_BANG_EQUAL]    = {NULL,     binary, PREC_EQUALITY},
   [TOKEN_EQUAL]         = {NULL,     NULL,   PREC_NONE},
@@ -583,11 +684,19 @@ ParseRule rules[] = {
   [TOKEN_GREATER_EQUAL] = {NULL,     binary, PREC_COMPARISON},
   [TOKEN_LESS]          = {NULL,     binary, PREC_COMPARISON},
   [TOKEN_LESS_EQUAL]    = {NULL,     binary, PREC_COMPARISON},
+  [TOKEN_PLUS_EQUAL]    = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_MINUS_EQUAL]   = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_STAR_EQUAL]    = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_SLASH_EQUAL]   = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_PERCENT_EQUAL] = {NULL,     NULL,   PREC_NONE},
   [TOKEN_IDENTIFIER]    = {variable,     NULL,   PREC_NONE},
   [TOKEN_STRING]        = {string,     NULL,   PREC_NONE},
   [TOKEN_NUMBER]        = {number,   NULL,   PREC_NONE},
+  [TOKEN_INTERPOLATION] = {interpolation, NULL, PREC_NONE},
   [TOKEN_AND]           = {NULL,     and_,   PREC_AND},
+  [TOKEN_BREAK]         = {NULL,     NULL,   PREC_NONE},
   [TOKEN_CLASS]         = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_CONTINUE]      = {NULL,     NULL,   PREC_NONE},
   [TOKEN_ELSE]          = {NULL,     NULL,   PREC_NONE},
   [TOKEN_FALSE]         = {literal,     NULL,   PREC_NONE},
   [TOKEN_FOR]           = {NULL,     NULL,   PREC_NONE},
@@ -630,7 +739,10 @@ static void parsePrecedence(Precedence precedence) {
     infixRule(canAssign);
   }
 
-  if (canAssign && match(TOKEN_EQUAL)) {
+  if (canAssign && (match(TOKEN_EQUAL) ||
+      match(TOKEN_PLUS_EQUAL) || match(TOKEN_MINUS_EQUAL) ||
+      match(TOKEN_STAR_EQUAL) || match(TOKEN_SLASH_EQUAL) ||
+      match(TOKEN_PERCENT_EQUAL))) {
     error("Invalid assignment target.");
   }
 }
@@ -860,11 +972,27 @@ static void whileStatement() {
 
   int exitJump = emitJump(OP_JUMP_IF_FALSE);
   emitByte(OP_POP);
+
+  Loop loop;
+  loop.enclosing = currentLoop;
+  loop.scopeDepth = current->scopeDepth;
+  loop.breakCount = 0;
+  loop.continueTarget = loopStart;
+  loop.hasContinueTarget = true;
+  loop.continueCount = 0;
+  currentLoop = &loop;
+
   statement();
   emitLoop(loopStart);
 
   patchJump(exitJump);
   emitByte(OP_POP);
+
+  for (int i = 0; i < loop.breakCount; i++) {
+    patchJump(loop.breakJumps[i]);
+  }
+
+  currentLoop = loop.enclosing;
 }
 
 static void forEachStatement() {
@@ -902,6 +1030,15 @@ static void forEachStatement() {
   int exitJump = emitJump(OP_JUMP_IF_FALSE);
   emitByte(OP_POP); // Pop the true.
 
+  // Set up loop context. scopeDepth is the outer for-each scope.
+  Loop loop;
+  loop.enclosing = currentLoop;
+  loop.scopeDepth = current->scopeDepth;
+  loop.breakCount = 0;
+  loop.hasContinueTarget = false;
+  loop.continueCount = 0;
+  currentLoop = &loop;
+
   // Inner scope for the user's variable.
   beginScope();
 
@@ -917,6 +1054,11 @@ static void forEachStatement() {
 
   endScope(); // Pops user's variable.
 
+  // Patch continue jumps to here (before increment).
+  for (int i = 0; i < loop.continueCount; i++) {
+    patchJump(loop.continueJumps[i]);
+  }
+
   // Increment index: index = index + 1
   emitBytes(OP_GET_LOCAL, (uint8_t)indexSlot);
   emitConstant(NUMBER_VAL(1));
@@ -929,6 +1071,12 @@ static void forEachStatement() {
   patchJump(exitJump);
   emitByte(OP_POP); // Pop the false.
 
+  // Patch break jumps to here.
+  for (int i = 0; i < loop.breakCount; i++) {
+    patchJump(loop.breakJumps[i]);
+  }
+
+  currentLoop = loop.enclosing;
   endScope(); // Pops hidden locals.
 }
 
@@ -1018,6 +1166,15 @@ forBody:;
     patchJump(bodyJump);
   }
 
+  Loop loop;
+  loop.enclosing = currentLoop;
+  loop.scopeDepth = current->scopeDepth;
+  loop.breakCount = 0;
+  loop.continueTarget = loopStart;
+  loop.hasContinueTarget = true;
+  loop.continueCount = 0;
+  currentLoop = &loop;
+
   statement();
   emitLoop(loopStart);
 
@@ -1026,6 +1183,11 @@ forBody:;
     emitByte(OP_POP); // Condition.
   }
 
+  for (int i = 0; i < loop.breakCount; i++) {
+    patchJump(loop.breakJumps[i]);
+  }
+
+  currentLoop = loop.enclosing;
   endScope();
 }
 
@@ -1117,6 +1279,64 @@ static void returnStatement() {
   }
 }
 
+static void breakStatement() {
+  if (currentLoop == NULL) {
+    error("Can't use 'break' outside of a loop.");
+    return;
+  }
+
+  consume(TOKEN_SEMICOLON, "Expect ';' after 'break'.");
+
+  // Pop locals down to the loop's scope depth.
+  for (int i = current->localCount - 1; i >= 0; i--) {
+    if (current->locals[i].depth != -1 &&
+        current->locals[i].depth <= currentLoop->scopeDepth) break;
+    if (current->locals[i].isCaptured) {
+      emitByte(OP_CLOSE_UPVALUE);
+    } else {
+      emitByte(OP_POP);
+    }
+  }
+
+  if (currentLoop->breakCount < 256) {
+    currentLoop->breakJumps[currentLoop->breakCount++] =
+        emitJump(OP_JUMP);
+  } else {
+    error("Too many break statements in loop.");
+  }
+}
+
+static void continueStatement() {
+  if (currentLoop == NULL) {
+    error("Can't use 'continue' outside of a loop.");
+    return;
+  }
+
+  consume(TOKEN_SEMICOLON, "Expect ';' after 'continue'.");
+
+  // Pop locals down to the loop's scope depth.
+  for (int i = current->localCount - 1; i >= 0; i--) {
+    if (current->locals[i].depth != -1 &&
+        current->locals[i].depth <= currentLoop->scopeDepth) break;
+    if (current->locals[i].isCaptured) {
+      emitByte(OP_CLOSE_UPVALUE);
+    } else {
+      emitByte(OP_POP);
+    }
+  }
+
+  if (currentLoop->hasContinueTarget) {
+    emitLoop(currentLoop->continueTarget);
+  } else {
+    if (currentLoop->continueCount < 256) {
+      currentLoop->continueJumps[currentLoop->continueCount++] =
+          emitJump(OP_JUMP);
+    } else {
+      error("Too many continue statements in loop.");
+    }
+  }
+}
+
 static void synchronize() {
   parser.panicMode = false;
 
@@ -1132,6 +1352,8 @@ static void synchronize() {
       case TOKEN_PRINT:
       case TOKEN_RETURN:
       case TOKEN_SWITCH:
+      case TOKEN_BREAK:
+      case TOKEN_CONTINUE:
         return;
 
       default:
@@ -1169,6 +1391,10 @@ static void statement() {
     forStatement();
   } else if (match(TOKEN_SWITCH)) {
     switchStatement();
+  } else if (match(TOKEN_BREAK)) {
+    breakStatement();
+  } else if (match(TOKEN_CONTINUE)) {
+    continueStatement();
   } else if (match(TOKEN_LEFT_BRACE)) {
     beginScope();
     block();

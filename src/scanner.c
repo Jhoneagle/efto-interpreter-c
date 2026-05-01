@@ -4,10 +4,14 @@
 #include "common.h"
 #include "scanner.h"
 
+#define MAX_INTERPOLATION_NESTING 8
+
 typedef struct {
   const char* start;
   const char* current;
   int line;
+  int interpolationDepth;
+  int numBraces[MAX_INTERPOLATION_NESTING];
 } Scanner;
 
 Scanner scanner;
@@ -16,6 +20,7 @@ void initScanner(const char* source) {
   scanner.start = source;
   scanner.current = source;
   scanner.line = 1;
+  scanner.interpolationDepth = 0;
 }
 
 static bool isAlpha(char c) {
@@ -111,11 +116,13 @@ static TokenType checkKeyword(int start, int length,
 static TokenType identifierType() {
   switch (scanner.start[0]) {
     case 'a': return checkKeyword(1, 2, "nd", TOKEN_AND);
+    case 'b': return checkKeyword(1, 4, "reak", TOKEN_BREAK);
     case 'c':
       if (scanner.current - scanner.start > 1) {
         switch (scanner.start[1]) {
           case 'l': return checkKeyword(2, 3, "ass", TOKEN_CLASS);
           case 'a': return checkKeyword(2, 2, "se", TOKEN_CASE);
+          case 'o': return checkKeyword(2, 6, "ntinue", TOKEN_CONTINUE);
         }
       }
       break;
@@ -185,9 +192,41 @@ static Token number() {
   return makeToken(TOKEN_NUMBER);
 }
 
+static Token stringContinuation() {
+  while (peek() != '"' && !isAtEnd()) {
+    if (peek() == '\n') scanner.line++;
+    if (peek() == '$' && peekNext() == '{') {
+      Token token = makeToken(TOKEN_INTERPOLATION);
+      advance(); // skip $
+      advance(); // skip {
+      if (scanner.interpolationDepth < MAX_INTERPOLATION_NESTING) {
+        scanner.interpolationDepth++;
+        scanner.numBraces[scanner.interpolationDepth - 1] = 0;
+      }
+      return token;
+    }
+    advance();
+  }
+
+  if (isAtEnd()) return errorToken("Unterminated string.");
+  advance(); // closing "
+  return makeToken(TOKEN_STRING);
+}
+
 static Token string() {
   while (peek() != '"' && !isAtEnd()) {
     if (peek() == '\n') scanner.line++;
+    if (peek() == '$' && peekNext() == '{') {
+      // Interpolated string: token covers from opening " to just before ${
+      Token token = makeToken(TOKEN_INTERPOLATION);
+      advance(); // skip $
+      advance(); // skip {
+      if (scanner.interpolationDepth < MAX_INTERPOLATION_NESTING) {
+        scanner.interpolationDepth++;
+        scanner.numBraces[scanner.interpolationDepth - 1] = 0;
+      }
+      return token;
+    }
     advance();
   }
 
@@ -211,18 +250,43 @@ Token scanToken() {
   switch (c) {
     case '(': return makeToken(TOKEN_LEFT_PAREN);
     case ')': return makeToken(TOKEN_RIGHT_PAREN);
-    case '{': return makeToken(TOKEN_LEFT_BRACE);
-    case '}': return makeToken(TOKEN_RIGHT_BRACE);
+    case '{':
+      if (scanner.interpolationDepth > 0) {
+        scanner.numBraces[scanner.interpolationDepth - 1]++;
+      }
+      return makeToken(TOKEN_LEFT_BRACE);
+    case '}':
+      if (scanner.interpolationDepth > 0 &&
+          scanner.numBraces[scanner.interpolationDepth - 1] == 0) {
+        scanner.interpolationDepth--;
+        scanner.start = scanner.current;
+        return stringContinuation();
+      }
+      if (scanner.interpolationDepth > 0) {
+        scanner.numBraces[scanner.interpolationDepth - 1]--;
+      }
+      return makeToken(TOKEN_RIGHT_BRACE);
     case ';': return makeToken(TOKEN_SEMICOLON);
     case ',': return makeToken(TOKEN_COMMA);
     case ':': return makeToken(TOKEN_COLON);
     case '[': return makeToken(TOKEN_LEFT_BRACKET);
     case ']': return makeToken(TOKEN_RIGHT_BRACKET);
     case '.': return makeToken(TOKEN_DOT);
-    case '-': return makeToken(TOKEN_MINUS);
-    case '+': return makeToken(TOKEN_PLUS);
-    case '/': return makeToken(TOKEN_SLASH);
-    case '*': return makeToken(TOKEN_STAR);
+    case '-':
+      return makeToken(
+          match('=') ? TOKEN_MINUS_EQUAL : TOKEN_MINUS);
+    case '+':
+      return makeToken(
+          match('=') ? TOKEN_PLUS_EQUAL : TOKEN_PLUS);
+    case '/':
+      return makeToken(
+          match('=') ? TOKEN_SLASH_EQUAL : TOKEN_SLASH);
+    case '*':
+      return makeToken(
+          match('=') ? TOKEN_STAR_EQUAL : TOKEN_STAR);
+    case '%':
+      return makeToken(
+          match('=') ? TOKEN_PERCENT_EQUAL : TOKEN_PERCENT);
     case '!':
       return makeToken(
           match('=') ? TOKEN_BANG_EQUAL : TOKEN_BANG);

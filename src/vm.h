@@ -25,6 +25,7 @@ typedef struct {
   ObjString* initString;
   ObjClass* arrayMethods;
   ObjClass* mapMethods;
+  ObjClass* stringMethods;
   ObjUpvalue* openUpvalues;
   size_t bytesAllocated;
   size_t nextGC;
