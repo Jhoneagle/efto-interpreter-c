@@ -1,0 +1,67 @@
+// Basic for-each over array.
+for (var item in [10, 20, 30]) {
+  print item;
+}
+// expect: 10
+// expect: 20
+// expect: 30
+
+// For-each with variable.
+var arr = ["a", "b", "c"];
+for (var x in arr) {
+  print x;
+}
+// expect: a
+// expect: b
+// expect: c
+
+// For-each over empty array.
+for (var x in []) {
+  print "should not print";
+}
+
+// For-each does not modify original array.
+var nums = [1, 2, 3];
+for (var n in nums) {
+  print n;
+}
+// expect: 1
+// expect: 2
+// expect: 3
+print nums.length; // expect: 3
+
+// Nested for-each.
+for (var i in [1, 2]) {
+  for (var j in [10, 20]) {
+    print i * j;
+  }
+}
+// expect: 10
+// expect: 20
+// expect: 20
+// expect: 40
+
+// For-each with function result.
+fun getItems() {
+  return [100, 200];
+}
+for (var v in getItems()) {
+  print v;
+}
+// expect: 100
+// expect: 200
+
+// For-each over map keys.
+var m = {"x": 1};
+for (var k in m.keys()) {
+  print k;
+}
+// expect: x
+
+// Regular for loop still works.
+for (var i = 0; i < 3; i = i + 1) {
+  print i;
+}
+// expect: 0
+// expect: 1
+// expect: 2

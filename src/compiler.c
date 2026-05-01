@@ -605,6 +605,7 @@ ParseRule rules[] = {
   [TOKEN_SWITCH]        = {NULL,     NULL,   PREC_NONE},
   [TOKEN_CASE]          = {NULL,     NULL,   PREC_NONE},
   [TOKEN_DEFAULT]       = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_IN]            = {NULL,     NULL,   PREC_NONE},
   [TOKEN_COLON]         = {NULL,     NULL,   PREC_NONE},
   [TOKEN_LEFT_BRACKET]  = {arrayLiteral, subscript, PREC_CALL},
   [TOKEN_RIGHT_BRACKET] = {NULL,     NULL,   PREC_NONE},
@@ -866,18 +867,133 @@ static void whileStatement() {
   emitByte(OP_POP);
 }
 
-static void forStatement() {
+static void forEachStatement() {
+  // for (var item in collection) { body }
+  // Caller already consumed 'for', '(', 'var', <identifier>, 'in'.
+  // parser.previous is set to the iterator variable name.
   beginScope();
+
+  Token iteratorName = parser.previous;
+
+  // Compile the collection expression -> hidden local (slot C).
+  expression();
+  consume(TOKEN_RIGHT_PAREN, "Expect ')' after for-each collection.");
+
+  addLocal(syntheticToken(""));
+  markInitialized();
+  int collectionSlot = current->localCount - 1;
+
+  // Hidden index local initialized to 0 (slot I).
+  emitConstant(NUMBER_VAL(0));
+  addLocal(syntheticToken(""));
+  markInitialized();
+  int indexSlot = current->localCount - 1;
+
+  // Loop start: check index < collection.length
+  int loopStart = currentChunk()->count;
+
+  emitBytes(OP_GET_LOCAL, (uint8_t)indexSlot);
+  emitBytes(OP_GET_LOCAL, (uint8_t)collectionSlot);
+  uint8_t lengthConstant = makeConstant(OBJ_VAL(
+      copyString("length", 6)));
+  emitBytes(OP_GET_PROPERTY, lengthConstant);
+  emitByte(OP_LESS);
+
+  int exitJump = emitJump(OP_JUMP_IF_FALSE);
+  emitByte(OP_POP); // Pop the true.
+
+  // Inner scope for the user's variable.
+  beginScope();
+
+  // var item = collection[index]
+  emitBytes(OP_GET_LOCAL, (uint8_t)collectionSlot);
+  emitBytes(OP_GET_LOCAL, (uint8_t)indexSlot);
+  emitByte(OP_INDEX_GET);
+  addLocal(iteratorName);
+  markInitialized();
+
+  // Compile the body.
+  statement();
+
+  endScope(); // Pops user's variable.
+
+  // Increment index: index = index + 1
+  emitBytes(OP_GET_LOCAL, (uint8_t)indexSlot);
+  emitConstant(NUMBER_VAL(1));
+  emitByte(OP_ADD);
+  emitBytes(OP_SET_LOCAL, (uint8_t)indexSlot);
+  emitByte(OP_POP);
+
+  emitLoop(loopStart);
+
+  patchJump(exitJump);
+  emitByte(OP_POP); // Pop the false.
+
+  endScope(); // Pops hidden locals.
+}
+
+static void forStatement() {
   consume(TOKEN_LEFT_PAREN, "Expect '(' after 'for'.");
+
+  // Check for for-each: for (var <name> in <expr>)
+  if (match(TOKEN_VAR)) {
+    if (check(TOKEN_IDENTIFIER) && parser.current.type == TOKEN_IDENTIFIER) {
+      // Save the identifier token, consume it.
+      advance();
+      Token name = parser.previous;
+
+      if (match(TOKEN_IN)) {
+        // It's a for-each. parser.previous was the identifier.
+        // Temporarily set parser.previous to the name so
+        // forEachStatement can use it.
+        parser.previous = name;
+        forEachStatement();
+        return;
+      }
+
+      // Not for-each. We consumed 'var' and '<identifier>'.
+      // Continue as a regular for with var declaration.
+      beginScope();
+      declareVariable();
+      if (current->scopeDepth > 0) {
+        if (match(TOKEN_EQUAL)) {
+          expression();
+        } else {
+          emitByte(OP_NIL);
+        }
+        consume(TOKEN_SEMICOLON,
+                "Expect ';' after variable declaration.");
+        markInitialized();
+      } else {
+        uint8_t global = identifierConstant(&name);
+        if (match(TOKEN_EQUAL)) {
+          expression();
+        } else {
+          emitByte(OP_NIL);
+        }
+        consume(TOKEN_SEMICOLON,
+                "Expect ';' after variable declaration.");
+        emitBytes(OP_DEFINE_GLOBAL, global);
+      }
+      goto forBody;
+    }
+    // 'var' but not an identifier next — shouldn't happen, but
+    // let varDeclaration handle the error.
+    beginScope();
+    varDeclaration();
+    goto forBody;
+  }
+
+  // Regular for loop (no var).
+  beginScope();
 
   if (match(TOKEN_SEMICOLON)) {
     // No initializer.
-  } else if (match(TOKEN_VAR)) {
-    varDeclaration();
   } else {
     expressionStatement();
   }
 
+forBody:;
   int loopStart = currentChunk()->count;
 
   int exitJump = -1;
