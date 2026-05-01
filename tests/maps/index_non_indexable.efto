@@ -1,0 +1,3 @@
+// Indexing a string (not array or map).
+var s = "hello";
+print s[0]; // expect runtime error: Only arrays and maps support indexing.

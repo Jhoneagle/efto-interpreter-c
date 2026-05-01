@@ -1,0 +1,13 @@
+// Set existing key.
+var m = {"x": 1};
+m["x"] = 99;
+print m["x"]; // expect: 99
+
+// Add new key.
+m["y"] = 42;
+print m["y"]; // expect: 42
+
+// Assignment returns the value.
+var v = (m["z"] = 7);
+print v; // expect: 7
+print m["z"]; // expect: 7

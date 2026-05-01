@@ -1,0 +1,12 @@
+// Array literal and printing.
+var arr = [1, 2, 3];
+print arr; // expect: [1, 2, 3]
+
+// Empty array.
+print []; // expect: []
+
+// Mixed types.
+print [1, "two", true, nil]; // expect: [1, two, true, nil]
+
+// Single element.
+print [42]; // expect: [42]

@@ -1,0 +1,10 @@
+// Index assignment.
+var arr = [1, 2, 3];
+arr[0] = 99;
+print arr[0]; // expect: 99
+print arr; // expect: [99, 2, 3]
+
+// Assignment returns the value.
+var x = (arr[1] = 42);
+print x; // expect: 42
+print arr; // expect: [99, 42, 3]

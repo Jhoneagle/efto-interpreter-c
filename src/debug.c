@@ -125,6 +125,14 @@ int disassembleInstruction(Chunk* chunk, int offset) {
       return invokeInstruction("OP_INVOKE", chunk, offset);
     case OP_SUPER_INVOKE:
       return invokeInstruction("OP_SUPER_INVOKE", chunk, offset);
+    case OP_BUILD_MAP:
+      return byteInstruction("OP_BUILD_MAP", chunk, offset);
+    case OP_BUILD_ARRAY:
+      return byteInstruction("OP_BUILD_ARRAY", chunk, offset);
+    case OP_INDEX_GET:
+      return simpleInstruction("OP_INDEX_GET", offset);
+    case OP_INDEX_SET:
+      return simpleInstruction("OP_INDEX_SET", offset);
     case OP_CLOSURE: {
       offset++;
       uint8_t constant = chunk->code[offset++];

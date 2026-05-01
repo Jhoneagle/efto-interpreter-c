@@ -515,10 +515,58 @@ static void call(bool canAssign) {
   emitBytes(OP_CALL, argCount);
 }
 
+static void arrayLiteral(bool canAssign) {
+  uint8_t elementCount = 0;
+
+  if (!check(TOKEN_RIGHT_BRACKET)) {
+    do {
+      expression();
+      if (elementCount == 255) {
+        error("Can't have more than 255 elements in an array literal.");
+      }
+      elementCount++;
+    } while (match(TOKEN_COMMA));
+  }
+
+  consume(TOKEN_RIGHT_BRACKET, "Expect ']' after array elements.");
+  emitBytes(OP_BUILD_ARRAY, elementCount);
+}
+
+static void mapLiteral(bool canAssign) {
+  uint8_t entryCount = 0;
+
+  if (!check(TOKEN_RIGHT_BRACE)) {
+    do {
+      expression();
+      consume(TOKEN_COLON, "Expect ':' after map key.");
+      expression();
+      if (entryCount == 255) {
+        error("Can't have more than 255 entries in a map literal.");
+      }
+      entryCount++;
+    } while (match(TOKEN_COMMA));
+  }
+
+  consume(TOKEN_RIGHT_BRACE, "Expect '}' after map entries.");
+  emitBytes(OP_BUILD_MAP, entryCount);
+}
+
+static void subscript(bool canAssign) {
+  expression();
+  consume(TOKEN_RIGHT_BRACKET, "Expect ']' after index.");
+
+  if (canAssign && match(TOKEN_EQUAL)) {
+    expression();
+    emitByte(OP_INDEX_SET);
+  } else {
+    emitByte(OP_INDEX_GET);
+  }
+}
+
 ParseRule rules[] = {
   [TOKEN_LEFT_PAREN]    = {grouping, call,   PREC_CALL},
   [TOKEN_RIGHT_PAREN]   = {NULL,     NULL,   PREC_NONE},
-  [TOKEN_LEFT_BRACE]    = {NULL,     NULL,   PREC_NONE}, 
+  [TOKEN_LEFT_BRACE]    = {mapLiteral, NULL, PREC_NONE},
   [TOKEN_RIGHT_BRACE]   = {NULL,     NULL,   PREC_NONE},
   [TOKEN_COMMA]         = {NULL,     NULL,   PREC_NONE},
   [TOKEN_DOT]           = {NULL,     dot,    PREC_CALL},
@@ -554,6 +602,12 @@ ParseRule rules[] = {
   [TOKEN_TRUE]          = {literal,     NULL,   PREC_NONE},
   [TOKEN_VAR]           = {NULL,     NULL,   PREC_NONE},
   [TOKEN_WHILE]         = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_SWITCH]        = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_CASE]          = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_DEFAULT]       = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_COLON]         = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_LEFT_BRACKET]  = {arrayLiteral, subscript, PREC_CALL},
+  [TOKEN_RIGHT_BRACKET] = {NULL,     NULL,   PREC_NONE},
   [TOKEN_ERROR]         = {NULL,     NULL,   PREC_NONE},
   [TOKEN_EOF]           = {NULL,     NULL,   PREC_NONE},
 };
@@ -859,6 +913,76 @@ static void forStatement() {
   endScope();
 }
 
+static void switchStatement() {
+  consume(TOKEN_LEFT_PAREN, "Expect '(' after 'switch'.");
+
+  // Wrap in a scope so the switch value becomes a hidden local.
+  beginScope();
+  expression();
+  consume(TOKEN_RIGHT_PAREN, "Expect ')' after switch value.");
+  consume(TOKEN_LEFT_BRACE, "Expect '{' before switch cases.");
+
+  // The switch value is on the stack as a hidden local.
+  // Register it so we can read it back with OP_GET_LOCAL.
+  addLocal(syntheticToken(""));
+  markInitialized();
+  int switchLocal = current->localCount - 1;
+
+  int caseCount = 0;
+  int caseEnds[256];
+  bool hasDefault = false;
+
+  while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+    if (match(TOKEN_CASE)) {
+      if (hasDefault) {
+        error("Can't have a case after 'default'.");
+      }
+
+      // Push the switch value, then the case value, then compare.
+      emitBytes(OP_GET_LOCAL, (uint8_t)switchLocal);
+      expression();
+      consume(TOKEN_COLON, "Expect ':' after case value.");
+
+      emitByte(OP_EQUAL);
+      int skipJump = emitJump(OP_JUMP_IF_FALSE);
+      emitByte(OP_POP); // Pop the true result.
+
+      // Compile the case body.
+      statement();
+
+      // Jump to end of switch after the case body.
+      if (caseCount < 256) {
+        caseEnds[caseCount++] = emitJump(OP_JUMP);
+      } else {
+        error("Too many cases in switch statement.");
+      }
+
+      patchJump(skipJump);
+      emitByte(OP_POP); // Pop the false result.
+    } else if (match(TOKEN_DEFAULT)) {
+      if (hasDefault) {
+        error("Already have a default case.");
+      }
+      hasDefault = true;
+
+      consume(TOKEN_COLON, "Expect ':' after 'default'.");
+      statement();
+    } else {
+      error("Expect 'case' or 'default' in switch.");
+      return;
+    }
+  }
+
+  consume(TOKEN_RIGHT_BRACE, "Expect '}' after switch cases.");
+
+  // Patch all case end jumps to here.
+  for (int i = 0; i < caseCount; i++) {
+    patchJump(caseEnds[i]);
+  }
+
+  endScope();
+}
+
 static void returnStatement() {
   if (current->type == TYPE_SCRIPT) {
     error("Can't return from top-level code.");
@@ -891,6 +1015,7 @@ static void synchronize() {
       case TOKEN_WHILE:
       case TOKEN_PRINT:
       case TOKEN_RETURN:
+      case TOKEN_SWITCH:
         return;
 
       default:
@@ -926,6 +1051,8 @@ static void statement() {
     whileStatement();
   } else if (match(TOKEN_FOR)) {
     forStatement();
+  } else if (match(TOKEN_SWITCH)) {
+    switchStatement();
   } else if (match(TOKEN_LEFT_BRACE)) {
     beginScope();
     block();

@@ -5,9 +5,12 @@
 #include "chunk.h"
 #include "table.h"
 #include "value.h"
+#include "value_table.h"
 
 #define OBJ_TYPE(value)        (AS_OBJ(value)->type)
 
+#define IS_ARRAY(value)        isObjType(value, OBJ_ARRAY)
+#define IS_MAP(value)          isObjType(value, OBJ_MAP)
 #define IS_BOUND_METHOD(value) isObjType(value, OBJ_BOUND_METHOD)
 #define IS_CLASS(value)        isObjType(value, OBJ_CLASS)
 #define IS_CLOSURE(value)      isObjType(value, OBJ_CLOSURE)
@@ -16,6 +19,8 @@
 #define IS_NATIVE(value)       isObjType(value, OBJ_NATIVE)
 #define IS_STRING(value)       isObjType(value, OBJ_STRING)
 
+#define AS_ARRAY(value)        ((ObjArray*)AS_OBJ(value))
+#define AS_MAP(value)          ((ObjMap*)AS_OBJ(value))
 #define AS_BOUND_METHOD(value) ((ObjBoundMethod*)AS_OBJ(value))
 #define AS_CLASS(value)        ((ObjClass*)AS_OBJ(value))
 #define AS_CLOSURE(value)      ((ObjClosure*)AS_OBJ(value))
@@ -27,11 +32,13 @@
 #define AS_CSTRING(value)      (((ObjString*)AS_OBJ(value))->chars)
 
 typedef enum {
+  OBJ_ARRAY,
   OBJ_BOUND_METHOD,
   OBJ_CLASS,
   OBJ_CLOSURE,
   OBJ_FUNCTION,
   OBJ_INSTANCE,
+  OBJ_MAP,
   OBJ_NATIVE,
   OBJ_UPVALUE,
   OBJ_STRING,
@@ -42,6 +49,16 @@ struct Obj {
   bool isMarked;
   struct Obj* next;
 };
+
+typedef struct {
+  Obj obj;
+  ValueArray elements;
+} ObjArray;
+
+typedef struct {
+  Obj obj;
+  ValueTable entries;
+} ObjMap;
 
 typedef struct {
   Obj obj;
@@ -97,6 +114,8 @@ typedef struct {
   ObjClosure* method;
 } ObjBoundMethod;
 
+ObjArray* newArray();
+ObjMap* newMap();
 ObjBoundMethod* newBoundMethod(Value receiver,
                                ObjClosure* method);
 ObjClass* newClass(ObjString* name);

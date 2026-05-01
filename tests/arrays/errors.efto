@@ -1,0 +1,3 @@
+// Index out of bounds.
+var arr = [1, 2, 3];
+print arr[5]; // expect runtime error: Array index 5 out of bounds [0, 3).

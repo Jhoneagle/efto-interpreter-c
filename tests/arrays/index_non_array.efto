@@ -1,0 +1,3 @@
+// Indexing a non-array.
+var x = 42;
+print x[0]; // expect runtime error: Only arrays and maps support indexing.

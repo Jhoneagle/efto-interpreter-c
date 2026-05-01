@@ -2,6 +2,7 @@
 
 #include "compiler.h"
 #include "memory.h"
+#include "value_table.h"
 #include "vm.h"
 
 #ifdef DEBUG_LOG_GC
@@ -77,6 +78,11 @@ static void blackenObject(Obj* object) {
   #endif
 
   switch (object->type) {
+    case OBJ_ARRAY: {
+      ObjArray* array = (ObjArray*)object;
+      markArray(&array->elements);
+      break;
+    }
     case OBJ_BOUND_METHOD: {
       ObjBoundMethod* bound = (ObjBoundMethod*)object;
       markValue(bound->receiver);
@@ -87,6 +93,11 @@ static void blackenObject(Obj* object) {
       ObjInstance* instance = (ObjInstance*)object;
       markObject((Obj*)instance->klass);
       markTable(&instance->fields);
+      break;
+    }
+    case OBJ_MAP: {
+      ObjMap* map = (ObjMap*)object;
+      markValueTable(&map->entries);
       break;
     }
     case OBJ_CLASS: {
@@ -124,6 +135,12 @@ static void freeObject(Obj* object) {
   #endif
 
   switch (object->type) {
+    case OBJ_ARRAY: {
+      ObjArray* array = (ObjArray*)object;
+      freeValueArray(&array->elements);
+      FREE(ObjArray, object);
+      break;
+    }
     case OBJ_BOUND_METHOD:
       FREE(ObjBoundMethod, object);
       break;
@@ -150,6 +167,12 @@ static void freeObject(Obj* object) {
       ObjInstance* instance = (ObjInstance*)object;
       freeTable(&instance->fields);
       FREE(ObjInstance, object);
+      break;
+    }
+    case OBJ_MAP: {
+      ObjMap* map = (ObjMap*)object;
+      freeValueTable(&map->entries);
+      FREE(ObjMap, object);
       break;
     }
     case OBJ_NATIVE:

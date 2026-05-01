@@ -1,0 +1,19 @@
+// Number keys.
+var m = {1: "one", 2: "two"};
+print m[1]; // expect: one
+print m[2]; // expect: two
+
+// Boolean keys.
+var b = {true: "yes", false: "no"};
+print b[true]; // expect: yes
+print b[false]; // expect: no
+
+// Nil key.
+var n = {nil: "nothing"};
+print n[nil]; // expect: nothing
+
+// Mixed key types.
+var mix = {"name": "efto", 42: "answer", true: "bool"};
+print mix["name"]; // expect: efto
+print mix[42]; // expect: answer
+print mix[true]; // expect: bool

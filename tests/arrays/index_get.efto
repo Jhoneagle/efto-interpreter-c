@@ -1,0 +1,10 @@
+// Index access.
+var arr = [10, 20, 30];
+print arr[0]; // expect: 10
+print arr[1]; // expect: 20
+print arr[2]; // expect: 30
+
+// Index with expression.
+var i = 1;
+print arr[i]; // expect: 20
+print arr[i + 1]; // expect: 30

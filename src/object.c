@@ -5,6 +5,7 @@
 #include "object.h"
 #include "table.h"
 #include "value.h"
+#include "value_table.h"
 #include "vm.h"
 
 #define ALLOCATE_OBJ(type, objectType) \
@@ -23,6 +24,18 @@ static Obj* allocateObject(size_t size, ObjType type) {
   #endif
 
   return object;
+}
+
+ObjArray* newArray() {
+  ObjArray* array = ALLOCATE_OBJ(ObjArray, OBJ_ARRAY);
+  initValueArray(&array->elements);
+  return array;
+}
+
+ObjMap* newMap() {
+  ObjMap* map = ALLOCATE_OBJ(ObjMap, OBJ_MAP);
+  initValueTable(&map->entries);
+  return map;
 }
 
 ObjBoundMethod* newBoundMethod(Value receiver, ObjClosure* method) {
@@ -140,6 +153,16 @@ static void printFunction(ObjFunction* function) {
 
 void printObject(Value value) {
   switch (OBJ_TYPE(value)) {
+    case OBJ_ARRAY: {
+      ObjArray* array = AS_ARRAY(value);
+      printf("[");
+      for (int i = 0; i < array->elements.count; i++) {
+        if (i > 0) printf(", ");
+        printValue(array->elements.values[i]);
+      }
+      printf("]");
+      break;
+    }
     case OBJ_BOUND_METHOD:
       printFunction(AS_BOUND_METHOD(value)->method->function);
       break;
@@ -156,6 +179,22 @@ void printObject(Value value) {
       printf("%s instance",
              AS_INSTANCE(value)->klass->name->chars);
       break;
+    case OBJ_MAP: {
+      ObjMap* map = AS_MAP(value);
+      printf("{");
+      bool first = true;
+      for (int i = 0; i < map->entries.capacity; i++) {
+        ValueEntry* entry = &map->entries.entries[i];
+        if (!entry->occupied) continue;
+        if (!first) printf(", ");
+        printValue(entry->key);
+        printf(": ");
+        printValue(entry->value);
+        first = false;
+      }
+      printf("}");
+      break;
+    }
     case OBJ_NATIVE:
       printf("<native fn>");
       break;

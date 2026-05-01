@@ -8,6 +8,7 @@
 #include "debug.h"
 #include "object.h"
 #include "memory.h"
+#include "value_table.h"
 #include "vm.h"
 
 VM vm;
@@ -475,6 +476,106 @@ static InterpretResult run() {
           return INTERPRET_RUNTIME_ERROR;
         }
         frame = &vm.frames[vm.frameCount - 1];
+        break;
+      }
+      case OP_BUILD_MAP: {
+        uint8_t entryCount = READ_BYTE();
+        ObjMap* map = newMap();
+        // Push the map so GC can find it.
+        push(OBJ_VAL(map));
+        // Entries are on the stack as key, value, key, value, ...
+        // They sit below the map we just pushed.
+        for (int i = entryCount; i > 0; i--) {
+          Value val = vm.stackTop[-1 - (2 * i - 1)];
+          Value key = vm.stackTop[-1 - (2 * i)];
+          valueTableSet(&map->entries, key, val);
+        }
+        // Remove the key-value pairs from under the map.
+        vm.stackTop[-1 - 2 * entryCount] = OBJ_VAL(map);
+        vm.stackTop -= 2 * entryCount;
+        break;
+      }
+      case OP_BUILD_ARRAY: {
+        uint8_t elementCount = READ_BYTE();
+        ObjArray* array = newArray();
+        // Push the array first so GC can find it, then populate.
+        push(OBJ_VAL(array));
+        for (int i = elementCount; i > 0; i--) {
+          writeValueArray(&array->elements,
+                          vm.stackTop[-1 - i]);
+        }
+        // Remove the elements and the temporary array from stack.
+        // Move elements out from under the array.
+        vm.stackTop[-1 - elementCount] = OBJ_VAL(array);
+        vm.stackTop -= elementCount;
+        break;
+      }
+      case OP_INDEX_GET: {
+        Value index = pop();
+        Value receiver = pop();
+
+        if (IS_ARRAY(receiver)) {
+          if (!IS_NUMBER(index)) {
+            runtimeError("Array index must be a number.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
+
+          ObjArray* array = AS_ARRAY(receiver);
+          int i = (int)AS_NUMBER(index);
+
+          if (i < 0 || i >= array->elements.count) {
+            runtimeError("Array index %d out of bounds [0, %d).",
+                         i, array->elements.count);
+            return INTERPRET_RUNTIME_ERROR;
+          }
+
+          push(array->elements.values[i]);
+        } else if (IS_MAP(receiver)) {
+          ObjMap* map = AS_MAP(receiver);
+          Value value;
+
+          if (!valueTableGet(&map->entries, index, &value)) {
+            runtimeError("Key not found in map.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
+
+          push(value);
+        } else {
+          runtimeError("Only arrays and maps support indexing.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        break;
+      }
+      case OP_INDEX_SET: {
+        Value value = pop();
+        Value index = pop();
+        Value receiver = pop();
+
+        if (IS_ARRAY(receiver)) {
+          if (!IS_NUMBER(index)) {
+            runtimeError("Array index must be a number.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
+
+          ObjArray* array = AS_ARRAY(receiver);
+          int i = (int)AS_NUMBER(index);
+
+          if (i < 0 || i >= array->elements.count) {
+            runtimeError("Array index %d out of bounds [0, %d).",
+                         i, array->elements.count);
+            return INTERPRET_RUNTIME_ERROR;
+          }
+
+          array->elements.values[i] = value;
+        } else if (IS_MAP(receiver)) {
+          ObjMap* map = AS_MAP(receiver);
+          valueTableSet(&map->entries, index, value);
+        } else {
+          runtimeError("Only arrays and maps support index assignment.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
+
+        push(value);
         break;
       }
       case OP_CLOSURE: {

@@ -1,0 +1,16 @@
+// Passing array literal directly to a function.
+fun printFirst(a) {
+  print a[0];
+}
+
+printFirst([10, 20, 30]); // expect: 10
+
+// Passing array as variable.
+var arr = ["hello", "world"];
+printFirst(arr); // expect: hello
+
+// Array in expressions.
+fun sum(a) {
+  return a[0] + a[1] + a[2];
+}
+print sum([1, 2, 3]); // expect: 6

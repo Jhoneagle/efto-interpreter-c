@@ -23,6 +23,8 @@ import sys
 from pathlib import Path
 
 INTERPRETER_PATHS = [
+    "out/build/x64-Debug/interpreter.exe",
+    "out/build/x64-Debug/interpreter",
     "build/Debug/interpreter.exe",
     "build/Debug/interpreter",
     "build/interpreter.exe",

@@ -1,0 +1,10 @@
+// Pass map literal directly to function.
+fun getValue(m, key) {
+  return m[key];
+}
+
+print getValue({"a": 10, "b": 20}, "b"); // expect: 20
+
+// Pass map as variable.
+var data = {"x": 100};
+print getValue(data, "x"); // expect: 100
