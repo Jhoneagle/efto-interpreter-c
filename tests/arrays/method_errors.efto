@@ -1,0 +1,3 @@
+// Pop from empty array.
+var arr = [];
+arr.pop(); // expect runtime error: Cannot pop from an empty array.

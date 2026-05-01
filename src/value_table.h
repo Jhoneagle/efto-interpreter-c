@@ -12,6 +12,7 @@ typedef struct {
 
 typedef struct {
   int count;
+  int liveCount;
   int capacity;
   ValueEntry* entries;
 } ValueTable;

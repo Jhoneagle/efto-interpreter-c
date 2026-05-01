@@ -1,0 +1,21 @@
+// has
+var m = {"a": 1, "b": 2};
+print m.has("a"); // expect: true
+print m.has("c"); // expect: false
+
+// remove
+m.remove("a");
+print m.has("a"); // expect: false
+print m.size; // expect: 1
+
+// keys returns an array with correct length
+var m2 = {"x": 10, "y": 20};
+print m2.keys().length; // expect: 2
+
+// values returns an array with correct length
+print m2.values().length; // expect: 2
+
+// keys and values on larger map
+var data = {1: "one", 2: "two", 3: "three"};
+print data.keys().length; // expect: 3
+print data.values().length; // expect: 3

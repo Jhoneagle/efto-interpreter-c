@@ -1,0 +1,22 @@
+// push
+var arr = [1, 2];
+arr.push(3);
+print arr; // expect: [1, 2, 3]
+print arr.length; // expect: 3
+
+// pop
+var last = arr.pop();
+print last; // expect: 3
+print arr; // expect: [1, 2]
+
+// slice
+var big = [10, 20, 30, 40, 50];
+var sub = big.slice(1, 4);
+print sub; // expect: [20, 30, 40]
+
+// slice does not modify original
+print big; // expect: [10, 20, 30, 40, 50]
+
+// slice with clamped bounds
+print big.slice(0, 100); // expect: [10, 20, 30, 40, 50]
+print big.slice(3, 3); // expect: []

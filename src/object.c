@@ -88,6 +88,14 @@ ObjNative* newNative(NativeFn function) {
   return native;
 }
 
+ObjNativeMethod* newNativeMethod(NativeMethodFn function, int arity) {
+  ObjNativeMethod* method = ALLOCATE_OBJ(ObjNativeMethod,
+                                          OBJ_NATIVE_METHOD);
+  method->function = function;
+  method->arity = arity;
+  return method;
+}
+
 ObjUpvalue* newUpvalue(Value* slot) {
   ObjUpvalue* upvalue = ALLOCATE_OBJ(ObjUpvalue, OBJ_UPVALUE);
   upvalue->closed = NIL_VAL;
@@ -197,6 +205,9 @@ void printObject(Value value) {
     }
     case OBJ_NATIVE:
       printf("<native fn>");
+      break;
+    case OBJ_NATIVE_METHOD:
+      printf("<native method>");
       break;
     case OBJ_UPVALUE:
       printf("upvalue");

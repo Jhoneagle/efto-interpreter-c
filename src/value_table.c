@@ -9,6 +9,7 @@
 
 void initValueTable(ValueTable* table) {
   table->count = 0;
+  table->liveCount = 0;
   table->capacity = 0;
   table->entries = NULL;
 }
@@ -102,6 +103,7 @@ static void adjustCapacity(ValueTable* table, int capacity) {
   }
 
   table->count = 0;
+  table->liveCount = 0;
   for (int i = 0; i < table->capacity; i++) {
     ValueEntry* entry = &table->entries[i];
     if (!entry->occupied) continue;
@@ -111,6 +113,7 @@ static void adjustCapacity(ValueTable* table, int capacity) {
     dest->value = entry->value;
     dest->occupied = true;
     table->count++;
+    table->liveCount++;
   }
 
   FREE_ARRAY(ValueEntry, table->entries, table->capacity);
@@ -132,6 +135,7 @@ bool valueTableSet(ValueTable* table, Value key, Value value) {
   entry->key = key;
   entry->value = value;
   entry->occupied = true;
+  if (isNewKey) table->liveCount++;
   return isNewKey;
 }
 
@@ -145,6 +149,7 @@ bool valueTableDelete(ValueTable* table, Value key) {
   entry->key = NIL_VAL;
   entry->value = BOOL_VAL(true);
   entry->occupied = false;
+  table->liveCount--;
   return true;
 }
 

@@ -1,0 +1,13 @@
+// Map size property.
+var m = {"a": 1, "b": 2, "c": 3};
+print m.size; // expect: 3
+
+// Empty map size.
+print {}.size; // expect: 0
+
+// Size after adding a key.
+var m2 = {};
+m2["x"] = 1;
+print m2.size; // expect: 1
+m2["y"] = 2;
+print m2.size; // expect: 2

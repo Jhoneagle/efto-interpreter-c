@@ -13,8 +13,108 @@
 
 VM vm;
 
-static Value clockNative(int argCount, Value* args) { // Native function to return the current time in seconds.
+static void runtimeError(const char* format, ...);
+
+static Value clockNative(int argCount, Value* args) {
   return NUMBER_VAL((double)clock() / CLOCKS_PER_SEC);
+}
+
+// --- Array native methods ---
+
+static bool arrayPush(Value receiver, int argCount, Value* args,
+                      Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  writeValueArray(&array->elements, args[0]);
+  *result = NIL_VAL;
+  return true;
+}
+
+static bool arrayPop(Value receiver, int argCount, Value* args,
+                     Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  if (array->elements.count == 0) {
+    runtimeError("Cannot pop from an empty array.");
+    return false;
+  }
+  *result = array->elements.values[--array->elements.count];
+  return true;
+}
+
+static bool arraySlice(Value receiver, int argCount, Value* args,
+                       Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+
+  if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+    runtimeError("Slice arguments must be numbers.");
+    return false;
+  }
+
+  int start = (int)AS_NUMBER(args[0]);
+  int end = (int)AS_NUMBER(args[1]);
+  int length = array->elements.count;
+
+  if (start < 0) start = 0;
+  if (end > length) end = length;
+  if (start > end) start = end;
+
+  ObjArray* sliced = newArray();
+  push(OBJ_VAL(sliced)); // GC protection
+  for (int i = start; i < end; i++) {
+    writeValueArray(&sliced->elements, array->elements.values[i]);
+  }
+  pop(); // remove GC protection
+
+  *result = OBJ_VAL(sliced);
+  return true;
+}
+
+// --- Map native methods ---
+
+static bool mapHas(Value receiver, int argCount, Value* args,
+                   Value* result) {
+  ObjMap* map = AS_MAP(receiver);
+  Value dummy;
+  *result = BOOL_VAL(valueTableGet(&map->entries, args[0], &dummy));
+  return true;
+}
+
+static bool mapKeys(Value receiver, int argCount, Value* args,
+                    Value* result) {
+  ObjMap* map = AS_MAP(receiver);
+  ObjArray* keys = newArray();
+  push(OBJ_VAL(keys)); // GC protection
+  for (int i = 0; i < map->entries.capacity; i++) {
+    ValueEntry* entry = &map->entries.entries[i];
+    if (entry->occupied) {
+      writeValueArray(&keys->elements, entry->key);
+    }
+  }
+  pop();
+  *result = OBJ_VAL(keys);
+  return true;
+}
+
+static bool mapValues(Value receiver, int argCount, Value* args,
+                      Value* result) {
+  ObjMap* map = AS_MAP(receiver);
+  ObjArray* values = newArray();
+  push(OBJ_VAL(values)); // GC protection
+  for (int i = 0; i < map->entries.capacity; i++) {
+    ValueEntry* entry = &map->entries.entries[i];
+    if (entry->occupied) {
+      writeValueArray(&values->elements, entry->value);
+    }
+  }
+  pop();
+  *result = OBJ_VAL(values);
+  return true;
+}
+
+static bool mapRemove(Value receiver, int argCount, Value* args,
+                      Value* result) {
+  ObjMap* map = AS_MAP(receiver);
+  *result = BOOL_VAL(valueTableDelete(&map->entries, args[0]));
+  return true;
 }
 
 static void resetStack() {
@@ -54,6 +154,15 @@ static void defineNative(const char* name, NativeFn function) {
   pop();
 }
 
+static void defineNativeMethod(ObjClass* klass, const char* name,
+                               NativeMethodFn function, int arity) {
+  push(OBJ_VAL(copyString(name, (int)strlen(name))));
+  push(OBJ_VAL(newNativeMethod(function, arity)));
+  tableSet(&klass->methods, AS_STRING(vm.stack[0]), vm.stack[1]);
+  pop();
+  pop();
+}
+
 void initVM() {
     resetStack();
     vm.objects = NULL;
@@ -70,6 +179,19 @@ void initVM() {
 
     vm.initString = NULL;
     vm.initString = copyString("init", 4);
+
+    vm.arrayMethods = NULL;
+    vm.arrayMethods = newClass(copyString("Array", 5));
+    defineNativeMethod(vm.arrayMethods, "push", arrayPush, 1);
+    defineNativeMethod(vm.arrayMethods, "pop", arrayPop, 0);
+    defineNativeMethod(vm.arrayMethods, "slice", arraySlice, 2);
+
+    vm.mapMethods = NULL;
+    vm.mapMethods = newClass(copyString("Map", 3));
+    defineNativeMethod(vm.mapMethods, "has", mapHas, 1);
+    defineNativeMethod(vm.mapMethods, "keys", mapKeys, 0);
+    defineNativeMethod(vm.mapMethods, "values", mapValues, 0);
+    defineNativeMethod(vm.mapMethods, "remove", mapRemove, 1);
 
     defineNative("clock", clockNative);
 }
@@ -161,11 +283,39 @@ static bool invokeFromClass(ObjClass* klass, ObjString* name, int argCount) {
     runtimeError("Undefined property '%s'.", name->chars);
     return false;
   }
+
+  if (IS_NATIVE_METHOD(method)) {
+    ObjNativeMethod* native = AS_NATIVE_METHOD(method);
+    if (argCount != native->arity) {
+      runtimeError("Expected %d arguments but got %d.",
+                   native->arity, argCount);
+      return false;
+    }
+
+    Value receiver = peek(argCount);
+    Value result;
+    if (!native->function(receiver, argCount,
+                          vm.stackTop - argCount, &result)) {
+      return false;
+    }
+    vm.stackTop -= argCount + 1;
+    push(result);
+    return true;
+  }
+
   return call(AS_CLOSURE(method), argCount);
 }
 
 static bool invoke(ObjString* name, int argCount) {
   Value receiver = peek(argCount);
+
+  if (IS_ARRAY(receiver)) {
+    return invokeFromClass(vm.arrayMethods, name, argCount);
+  }
+
+  if (IS_MAP(receiver)) {
+    return invokeFromClass(vm.mapMethods, name, argCount);
+  }
 
   if (!IS_INSTANCE(receiver)) {
     runtimeError("Only instances have methods.");
@@ -354,6 +504,36 @@ static InterpretResult run() {
         break;
       }
       case OP_GET_PROPERTY: {
+        if (IS_ARRAY(peek(0))) {
+          ObjArray* array = AS_ARRAY(peek(0));
+          ObjString* name = READ_STRING();
+
+          if (name->length == 6 &&
+              memcmp(name->chars, "length", 6) == 0) {
+            pop();
+            push(NUMBER_VAL(array->elements.count));
+            break;
+          }
+
+          runtimeError("Array has no property '%s'.", name->chars);
+          return INTERPRET_RUNTIME_ERROR;
+        }
+
+        if (IS_MAP(peek(0))) {
+          ObjMap* map = AS_MAP(peek(0));
+          ObjString* name = READ_STRING();
+
+          if (name->length == 4 &&
+              memcmp(name->chars, "size", 4) == 0) {
+            pop();
+            push(NUMBER_VAL(map->entries.liveCount));
+            break;
+          }
+
+          runtimeError("Map has no property '%s'.", name->chars);
+          return INTERPRET_RUNTIME_ERROR;
+        }
+
         if (!IS_INSTANCE(peek(0))) {
           runtimeError("Only instances have properties.");
           return INTERPRET_RUNTIME_ERROR;
