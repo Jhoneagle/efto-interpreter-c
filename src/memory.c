@@ -112,6 +112,14 @@ static void blackenObject(Obj* object) {
       for (int i = 0; i < closure->upvalueCount; i++) {
         markObject((Obj*)closure->upvalues[i]);
       }
+      markObject(closure->globalsOwner);
+      break;
+    }
+    case OBJ_MODULE: {
+      ObjModule* module = (ObjModule*)object;
+      markObject((Obj*)module->name);
+      markObject((Obj*)module->path);
+      markTable(&module->values);
       break;
     }
     case OBJ_FUNCTION: {
@@ -176,6 +184,12 @@ static void freeObject(Obj* object) {
       FREE(ObjMap, object);
       break;
     }
+    case OBJ_MODULE: {
+      ObjModule* module = (ObjModule*)object;
+      freeTable(&module->values);
+      FREE(ObjModule, object);
+      break;
+    }
     case OBJ_NATIVE:
       FREE(ObjNative, object);
       break;
@@ -226,6 +240,10 @@ static void markRoots() {
   markObject((Obj*)vm.arrayMethods);
   markObject((Obj*)vm.mapMethods);
   markObject((Obj*)vm.stringMethods);
+  markTable(&vm.importCache);
+  for (int i = 0; i < vm.searchPathCount; i++) {
+    markObject((Obj*)vm.searchPaths[i]);
+  }
 }
 
 static void traceReferences() {

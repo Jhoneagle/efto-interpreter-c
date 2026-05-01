@@ -1,0 +1,5 @@
+// Selective import.
+import { add, x } from attachments.helper;
+
+print x;          // expect: 42
+print add(3, 4);  // expect: 7

@@ -1,0 +1,7 @@
+// Basic namespace import.
+import attachments.helper;
+
+print helper.x;          // expect: 42
+print helper.greeting;   // expect: hello from helper
+print helper.add(1, 2);  // expect: 3
+print helper.square(5);  // expect: 25

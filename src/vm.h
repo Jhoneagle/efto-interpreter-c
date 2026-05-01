@@ -27,6 +27,9 @@ typedef struct {
   ObjClass* mapMethods;
   ObjClass* stringMethods;
   ObjUpvalue* openUpvalues;
+  Table importCache;
+  ObjString* searchPaths[8];
+  int searchPathCount;
   size_t bytesAllocated;
   size_t nextGC;
   Obj* objects;
@@ -48,5 +51,6 @@ void freeVM();
 InterpretResult interpret(const char* source);
 void push(Value value);
 Value pop();
+char* readFile(const char* path);
 
 #endif

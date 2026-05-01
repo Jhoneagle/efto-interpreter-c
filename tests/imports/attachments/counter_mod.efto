@@ -1,0 +1,10 @@
+var count = 0;
+
+fun increment() {
+  count = count + 1;
+  return count;
+}
+
+fun getCount() {
+  return count;
+}

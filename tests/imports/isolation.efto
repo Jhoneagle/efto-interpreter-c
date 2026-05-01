@@ -1,0 +1,6 @@
+// Module globals should not leak into the importing script.
+var x = "main";
+import attachments.helper;
+
+print x;          // expect: main
+print helper.x;   // expect: 42

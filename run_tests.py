@@ -139,15 +139,24 @@ def run_test(interpreter, filepath):
     return len(failures) == 0, failures
 
 
+SKIP_DIRS = {"attachments"}
+
+
 def discover_tests(paths):
-    """Find all .efto files from given paths (files or directories)."""
+    """Find all .efto files from given paths (files or directories).
+
+    Skips directories whose name is in SKIP_DIRS (e.g. 'attachments'),
+    which contain module files used by tests but are not tests themselves.
+    """
     tests = []
     for p in paths:
         path = Path(p)
         if path.is_file() and path.suffix == ".efto":
             tests.append(str(path))
         elif path.is_dir():
-            tests.extend(str(f) for f in sorted(path.rglob("*.efto")))
+            for f in sorted(path.rglob("*.efto")):
+                if not any(part in SKIP_DIRS for part in f.parts):
+                    tests.append(str(f))
     return tests
 
 

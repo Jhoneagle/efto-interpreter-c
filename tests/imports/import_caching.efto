@@ -1,0 +1,7 @@
+// Module should only execute once even when imported twice.
+import attachments.side_effect;
+import attachments.side_effect;
+
+print side_effect.data;
+// expect: loaded
+// expect: 99

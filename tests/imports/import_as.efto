@@ -1,0 +1,5 @@
+// Import with alias.
+import attachments.helper as h;
+
+print h.x;            // expect: 42
+print h.add(10, 20);  // expect: 30

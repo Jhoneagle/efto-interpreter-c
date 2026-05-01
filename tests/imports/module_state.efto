@@ -1,0 +1,7 @@
+// Module functions should share and mutate the module's own globals.
+import attachments.counter_mod as c;
+
+print c.getCount();    // expect: 0
+print c.increment();   // expect: 1
+print c.increment();   // expect: 2
+print c.getCount();    // expect: 2

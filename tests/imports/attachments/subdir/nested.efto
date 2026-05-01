@@ -1,0 +1,5 @@
+var value = "from nested";
+
+fun greet(name) {
+  return "hi " + name;
+}

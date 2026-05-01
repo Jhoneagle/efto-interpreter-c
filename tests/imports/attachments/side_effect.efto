@@ -1,0 +1,2 @@
+print "loaded"; // expect: loaded
+var data = 99;

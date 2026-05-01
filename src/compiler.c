@@ -715,6 +715,9 @@ ParseRule rules[] = {
   [TOKEN_CASE]          = {NULL,     NULL,   PREC_NONE},
   [TOKEN_DEFAULT]       = {NULL,     NULL,   PREC_NONE},
   [TOKEN_IN]            = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_IMPORT]        = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_AS]            = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_FROM]          = {NULL,     NULL,   PREC_NONE},
   [TOKEN_COLON]         = {NULL,     NULL,   PREC_NONE},
   [TOKEN_LEFT_BRACKET]  = {arrayLiteral, subscript, PREC_CALL},
   [TOKEN_RIGHT_BRACKET] = {NULL,     NULL,   PREC_NONE},
@@ -1354,6 +1357,7 @@ static void synchronize() {
       case TOKEN_SWITCH:
       case TOKEN_BREAK:
       case TOKEN_CONTINUE:
+      case TOKEN_IMPORT:
         return;
 
       default:
@@ -1364,6 +1368,96 @@ static void synchronize() {
   }
 }
 
+static void importDeclaration() {
+  if (current->scopeDepth > 0) {
+    error("Import declarations must be at top level.");
+    return;
+  }
+
+  if (match(TOKEN_LEFT_BRACE)) {
+    // Form 3: import { name1, name2 } from module;
+    uint8_t names[256];
+    int nameCount = 0;
+
+    do {
+      consume(TOKEN_IDENTIFIER, "Expect import name.");
+      if (nameCount >= 256) {
+        error("Too many names in import.");
+        return;
+      }
+      names[nameCount++] = identifierConstant(&parser.previous);
+    } while (match(TOKEN_COMMA));
+
+    consume(TOKEN_RIGHT_BRACE, "Expect '}' after import names.");
+    consume(TOKEN_FROM, "Expect 'from' after import names.");
+
+    // Parse dotted module name.
+    consume(TOKEN_IDENTIFIER, "Expect module name.");
+    char modulePath[256];
+    int pathLen = parser.previous.length;
+    memcpy(modulePath, parser.previous.start, pathLen);
+
+    while (match(TOKEN_DOT)) {
+      modulePath[pathLen++] = '.';
+      consume(TOKEN_IDENTIFIER, "Expect identifier after '.'.");
+      memcpy(modulePath + pathLen, parser.previous.start,
+             parser.previous.length);
+      pathLen += parser.previous.length;
+    }
+
+    consume(TOKEN_SEMICOLON, "Expect ';' after import declaration.");
+
+    uint8_t pathConst = makeConstant(
+        OBJ_VAL(copyString(modulePath, pathLen)));
+    emitBytes(OP_IMPORT, pathConst);
+
+    // Extract each name from the module.
+    for (int i = 0; i < nameCount; i++) {
+      if (i < nameCount - 1) {
+        emitBytes(OP_DUP, 0);
+      }
+      emitBytes(OP_GET_PROPERTY, names[i]);
+      emitBytes(OP_DEFINE_GLOBAL, names[i]);
+    }
+  } else {
+    // Form 1/2: import name; or import name as alias;
+    consume(TOKEN_IDENTIFIER, "Expect module name after 'import'.");
+
+    char modulePath[256];
+    int pathLen = parser.previous.length;
+    memcpy(modulePath, parser.previous.start, pathLen);
+
+    const char* nameStart = parser.previous.start;
+    int nameLen = parser.previous.length;
+
+    while (match(TOKEN_DOT)) {
+      modulePath[pathLen++] = '.';
+      consume(TOKEN_IDENTIFIER, "Expect identifier after '.'.");
+      memcpy(modulePath + pathLen, parser.previous.start,
+             parser.previous.length);
+      pathLen += parser.previous.length;
+      nameStart = parser.previous.start;
+      nameLen = parser.previous.length;
+    }
+
+    if (match(TOKEN_AS)) {
+      consume(TOKEN_IDENTIFIER, "Expect alias after 'as'.");
+      nameStart = parser.previous.start;
+      nameLen = parser.previous.length;
+    }
+
+    consume(TOKEN_SEMICOLON, "Expect ';' after import declaration.");
+
+    uint8_t pathConst = makeConstant(
+        OBJ_VAL(copyString(modulePath, pathLen)));
+    emitBytes(OP_IMPORT, pathConst);
+
+    uint8_t nameConst = makeConstant(
+        OBJ_VAL(copyString(nameStart, nameLen)));
+    emitBytes(OP_DEFINE_GLOBAL, nameConst);
+  }
+}
+
 static void declaration() {
   if (match(TOKEN_CLASS)) {
     classDeclaration();
@@ -1371,6 +1465,8 @@ static void declaration() {
     funDeclaration();
   } else if (match(TOKEN_VAR)) {
     varDeclaration();
+  } else if (match(TOKEN_IMPORT)) {
+    importDeclaration();
   } else {
     statement();
   }

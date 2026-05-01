@@ -1,0 +1,6 @@
+// Module functions should use the module's own globals.
+import attachments.helper as h;
+
+// add() and square() use the module's globals, not the importing script's.
+print h.add(10, 20);  // expect: 30
+print h.square(6);    // expect: 36

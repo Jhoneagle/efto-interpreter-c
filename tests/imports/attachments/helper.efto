@@ -1,0 +1,10 @@
+var x = 42;
+var greeting = "hello from helper";
+
+fun add(a, b) {
+  return a + b;
+}
+
+fun square(n) {
+  return n * n;
+}

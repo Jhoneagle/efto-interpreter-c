@@ -11,6 +11,7 @@
 
 #define IS_ARRAY(value)        isObjType(value, OBJ_ARRAY)
 #define IS_MAP(value)          isObjType(value, OBJ_MAP)
+#define IS_MODULE(value)       isObjType(value, OBJ_MODULE)
 #define IS_BOUND_METHOD(value) isObjType(value, OBJ_BOUND_METHOD)
 #define IS_CLASS(value)        isObjType(value, OBJ_CLASS)
 #define IS_CLOSURE(value)      isObjType(value, OBJ_CLOSURE)
@@ -22,6 +23,7 @@
 
 #define AS_ARRAY(value)        ((ObjArray*)AS_OBJ(value))
 #define AS_MAP(value)          ((ObjMap*)AS_OBJ(value))
+#define AS_MODULE(value)       ((ObjModule*)AS_OBJ(value))
 #define AS_BOUND_METHOD(value) ((ObjBoundMethod*)AS_OBJ(value))
 #define AS_CLASS(value)        ((ObjClass*)AS_OBJ(value))
 #define AS_CLOSURE(value)      ((ObjClosure*)AS_OBJ(value))
@@ -36,6 +38,7 @@
 typedef enum {
   OBJ_ARRAY,
   OBJ_BOUND_METHOD,
+  OBJ_MODULE,
   OBJ_CLASS,
   OBJ_CLOSURE,
   OBJ_FUNCTION,
@@ -103,9 +106,18 @@ typedef struct ObjUpvalue {
 
 typedef struct {
   Obj obj;
+  ObjString* name;
+  ObjString* path;
+  Table values;
+} ObjModule;
+
+typedef struct {
+  Obj obj;
   ObjFunction* function;
   ObjUpvalue** upvalues;
   int upvalueCount;
+  Table* globals;
+  Obj* globalsOwner;
 } ObjClosure;
 
 typedef struct {
@@ -128,6 +140,7 @@ typedef struct {
 
 ObjArray* newArray();
 ObjMap* newMap();
+ObjModule* newModule(ObjString* name, ObjString* path);
 ObjBoundMethod* newBoundMethod(Value receiver,
                                ObjClosure* method);
 ObjClass* newClass(ObjString* name);

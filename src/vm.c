@@ -2,6 +2,7 @@
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -241,6 +242,7 @@ static Value typeNative(int argCount, Value* args) {
       case OBJ_MAP:           return OBJ_VAL(copyString("map", 3));
       case OBJ_CLASS:         return OBJ_VAL(copyString("class", 5));
       case OBJ_INSTANCE:      return OBJ_VAL(copyString("instance", 8));
+      case OBJ_MODULE:        return OBJ_VAL(copyString("module", 6));
       case OBJ_FUNCTION:
       case OBJ_CLOSURE:
       case OBJ_NATIVE:
@@ -315,6 +317,8 @@ static ObjString* stringify(Value value) {
     switch (OBJ_TYPE(value)) {
       case OBJ_CLASS:
         return AS_CLASS(value)->name;
+      case OBJ_MODULE:
+        return AS_MODULE(value)->name;
       case OBJ_INSTANCE: {
         ObjString* name = AS_INSTANCE(value)->klass->name;
         int totalLen = name->length + 9;
@@ -331,6 +335,76 @@ static ObjString* stringify(Value value) {
   return copyString("<unknown>", 9);
 }
 
+char* readFile(const char* path) {
+  FILE* file = fopen(path, "rb");
+  if (file == NULL) return NULL;
+
+  fseek(file, 0L, SEEK_END);
+  size_t fileSize = ftell(file);
+  rewind(file);
+
+  char* buffer = (char*)malloc(fileSize + 1);
+  if (buffer == NULL) { fclose(file); return NULL; }
+
+  size_t bytesRead = fread(buffer, sizeof(char), fileSize, file);
+  fclose(file);
+
+  if (bytesRead < fileSize) { free(buffer); return NULL; }
+
+  buffer[bytesRead] = '\0';
+  return buffer;
+}
+
+static void copyNatives(Table* dest) {
+  for (int i = 0; i < vm.globals.capacity; i++) {
+    Entry* entry = &vm.globals.entries[i];
+    if (entry->key != NULL && IS_OBJ(entry->value) &&
+        IS_NATIVE(entry->value)) {
+      tableSet(dest, entry->key, entry->value);
+    }
+  }
+}
+
+static char* buildModulePath(const char* baseDir,
+                             const char* moduleName, int nameLen) {
+  int baseDirLen = baseDir ? (int)strlen(baseDir) : 0;
+  int maxLen = baseDirLen + 1 + nameLen + 5 + 1;
+  char* path = (char*)malloc(maxLen);
+
+  int pos = 0;
+  if (baseDirLen > 0) {
+    memcpy(path, baseDir, baseDirLen);
+    pos = baseDirLen;
+    if (path[pos - 1] != '/' && path[pos - 1] != '\\') {
+      path[pos++] = '/';
+    }
+  }
+
+  for (int i = 0; i < nameLen; i++) {
+    path[pos++] = (moduleName[i] == '.') ? '/' : moduleName[i];
+  }
+
+  memcpy(path + pos, ".efto", 5);
+  pos += 5;
+  path[pos] = '\0';
+  return path;
+}
+
+// Try each search path in order, return the first path where the file exists.
+static char* resolveModulePath(const char* moduleName, int nameLen) {
+  for (int i = 0; i < vm.searchPathCount; i++) {
+    const char* dir = vm.searchPaths[i] ? vm.searchPaths[i]->chars : ".";
+    char* candidate = buildModulePath(dir, moduleName, nameLen);
+    FILE* f = fopen(candidate, "rb");
+    if (f != NULL) {
+      fclose(f);
+      return candidate;
+    }
+    free(candidate);
+  }
+  return NULL;
+}
+
 void initVM() {
     resetStack();
     vm.objects = NULL;
@@ -344,6 +418,9 @@ void initVM() {
 
     initTable(&vm.globals);
     initTable(&vm.strings);
+    initTable(&vm.importCache);
+    vm.searchPathCount = 0;
+    for (int i = 0; i < 8; i++) vm.searchPaths[i] = NULL;
 
     vm.initString = NULL;
     vm.initString = copyString("init", 4);
@@ -377,6 +454,7 @@ void initVM() {
 void freeVM() {
   freeTable(&vm.globals);
   freeTable(&vm.strings);
+  freeTable(&vm.importCache);
   vm.initString = NULL;
   freeObjects();
 }
@@ -487,6 +565,18 @@ static bool invokeFromClass(ObjClass* klass, ObjString* name, int argCount) {
 static bool invoke(ObjString* name, int argCount) {
   Value receiver = peek(argCount);
 
+  if (IS_MODULE(receiver)) {
+    ObjModule* module = AS_MODULE(receiver);
+    Value value;
+    if (!tableGet(&module->values, name, &value)) {
+      runtimeError("Module '%s' has no member '%s'.",
+                   module->name->chars, name->chars);
+      return false;
+    }
+    vm.stackTop[-argCount - 1] = value;
+    return callValue(value, argCount);
+  }
+
   if (IS_STRING(receiver)) {
     return invokeFromClass(vm.stringMethods, name, argCount);
   }
@@ -590,7 +680,7 @@ static void concatenate() {
   push(OBJ_VAL(result));
 }
 
-static InterpretResult run() {
+static InterpretResult run(int baseFrame) {
   CallFrame* frame = &vm.frames[vm.frameCount - 1];
 
   #define READ_BYTE() (*frame->ip++)
@@ -653,7 +743,7 @@ static InterpretResult run() {
       case OP_GET_GLOBAL: {
         ObjString* name = READ_STRING();
         Value value;
-        if (!tableGet(&vm.globals, name, &value)) {
+        if (!tableGet(frame->closure->globals, name, &value)) {
           runtimeError("Undefined variable '%s'.", name->chars);
           return INTERPRET_RUNTIME_ERROR;
         }
@@ -662,14 +752,14 @@ static InterpretResult run() {
       }
       case OP_DEFINE_GLOBAL: {
         ObjString* name = READ_STRING();
-        tableSet(&vm.globals, name, peek(0));
+        tableSet(frame->closure->globals, name, peek(0));
         pop();
         break;
       }
       case OP_SET_GLOBAL: {
         ObjString* name = READ_STRING();
-        if (tableSet(&vm.globals, name, peek(0))) {
-          tableDelete(&vm.globals, name); 
+        if (tableSet(frame->closure->globals, name, peek(0))) {
+          tableDelete(frame->closure->globals, name);
           runtimeError("Undefined variable '%s'.", name->chars);
           return INTERPRET_RUNTIME_ERROR;
         }
@@ -686,6 +776,20 @@ static InterpretResult run() {
         break;
       }
       case OP_GET_PROPERTY: {
+        if (IS_MODULE(peek(0))) {
+          ObjModule* module = AS_MODULE(peek(0));
+          ObjString* name = READ_STRING();
+          Value value;
+          if (tableGet(&module->values, name, &value)) {
+            pop();
+            push(value);
+            break;
+          }
+          runtimeError("Module '%s' has no member '%s'.",
+                       module->name->chars, name->chars);
+          return INTERPRET_RUNTIME_ERROR;
+        }
+
         if (IS_STRING(peek(0))) {
           ObjString* string = AS_STRING(peek(0));
           ObjString* name = READ_STRING();
@@ -968,6 +1072,8 @@ static InterpretResult run() {
       case OP_CLOSURE: {
         ObjFunction* function = AS_FUNCTION(READ_CONSTANT());
         ObjClosure* closure = newClosure(function);
+        closure->globals = frame->closure->globals;
+        closure->globalsOwner = frame->closure->globalsOwner;
         push(OBJ_VAL(closure));
 
         for (int i = 0; i < closure->upvalueCount; i++) {
@@ -1001,7 +1107,7 @@ static InterpretResult run() {
         Value result = pop();
         closeUpvalues(frame->slots);
         vm.frameCount--;
-        if (vm.frameCount == 0) {
+        if (vm.frameCount == baseFrame) {
           pop();
           return INTERPRET_OK;
         }
@@ -1031,6 +1137,109 @@ static InterpretResult run() {
       case OP_METHOD:
         defineMethod(READ_STRING());
         break;
+      case OP_IMPORT: {
+        ObjString* moduleName = READ_STRING();
+
+        // Resolve path by searching all search paths.
+        char* resolvedPath = resolveModulePath(
+            moduleName->chars, moduleName->length);
+        if (resolvedPath == NULL) {
+          runtimeError("Could not find module '%s'.",
+                       moduleName->chars);
+          return INTERPRET_RUNTIME_ERROR;
+        }
+
+        ObjString* pathStr = copyString(resolvedPath,
+                                        (int)strlen(resolvedPath));
+        push(OBJ_VAL(pathStr)); // GC protect
+
+        // Check cache.
+        Value cached;
+        if (tableGet(&vm.importCache, pathStr, &cached)) {
+          pop(); // pathStr
+          free(resolvedPath);
+          if (IS_BOOL(cached)) {
+            runtimeError("Circular import detected: '%s'.",
+                         moduleName->chars);
+            return INTERPRET_RUNTIME_ERROR;
+          }
+          push(cached); // push cached ObjModule
+          break;
+        }
+
+        // Mark as loading (sentinel for circular import detection).
+        tableSet(&vm.importCache, pathStr, BOOL_VAL(true));
+
+        // Read source file.
+        char* source = readFile(resolvedPath);
+        if (source == NULL) {
+          pop(); // pathStr
+          free(resolvedPath);
+          runtimeError("Could not load module '%s'.",
+                       moduleName->chars);
+          return INTERPRET_RUNTIME_ERROR;
+        }
+
+        // Extract base name from dotted module name.
+        const char* baseName = moduleName->chars;
+        int baseLen = moduleName->length;
+        for (int i = moduleName->length - 1; i >= 0; i--) {
+          if (moduleName->chars[i] == '.') {
+            baseName = moduleName->chars + i + 1;
+            baseLen = moduleName->length - i - 1;
+            break;
+          }
+        }
+
+        // Create module object.
+        ObjString* nameStr = copyString(baseName, baseLen);
+        ObjModule* module = newModule(nameStr, pathStr);
+        push(OBJ_VAL(module)); // GC protect
+
+        // Copy native functions into module globals.
+        copyNatives(&module->values);
+
+        // Compile module source.
+        ObjFunction* modFunc = compile(source);
+        free(source);
+        if (modFunc == NULL) {
+          pop(); // module
+          pop(); // pathStr
+          free(resolvedPath);
+          runtimeError("Compilation error in module '%s'.",
+                       moduleName->chars);
+          return INTERPRET_RUNTIME_ERROR;
+        }
+
+        // Create closure with module's own globals.
+        ObjClosure* modClosure = newClosure(modFunc);
+        modClosure->globals = &module->values;
+        modClosure->globalsOwner = (Obj*)module;
+        free(resolvedPath);
+
+        // Execute module.
+        push(OBJ_VAL(modClosure));
+        call(modClosure, 0);
+        int savedFrameCount = vm.frameCount - 1;
+
+        InterpretResult modResult = run(savedFrameCount);
+
+        if (modResult != INTERPRET_OK) {
+          return modResult;
+        }
+
+        // Refresh frame pointer after recursive run().
+        frame = &vm.frames[vm.frameCount - 1];
+
+        // Cache the module (replace sentinel).
+        tableSet(&vm.importCache, pathStr, OBJ_VAL(module));
+
+        // Clean up stack: pop module, pop pathStr, push module.
+        pop(); // module (GC protect)
+        pop(); // pathStr (GC protect)
+        push(OBJ_VAL(module));
+        break;
+      }
     }
   }
 
@@ -1051,5 +1260,5 @@ InterpretResult interpret(const char* source) {
   push(OBJ_VAL(closure));
   call(closure, 0);
 
-  return run();
+  return run(0);
 }

@@ -38,6 +38,14 @@ ObjMap* newMap() {
   return map;
 }
 
+ObjModule* newModule(ObjString* name, ObjString* path) {
+  ObjModule* module = ALLOCATE_OBJ(ObjModule, OBJ_MODULE);
+  module->name = name;
+  module->path = path;
+  initTable(&module->values);
+  return module;
+}
+
 ObjBoundMethod* newBoundMethod(Value receiver, ObjClosure* method) {
   ObjBoundMethod* bound = ALLOCATE_OBJ(ObjBoundMethod, OBJ_BOUND_METHOD);
   bound->receiver = receiver;
@@ -63,6 +71,8 @@ ObjClosure* newClosure(ObjFunction* function) {
   closure->function = function;
   closure->upvalues = upvalues;
   closure->upvalueCount = function->upvalueCount;
+  closure->globals = &vm.globals;
+  closure->globalsOwner = NULL;
   return closure;
 }
 
@@ -186,6 +196,9 @@ void printObject(Value value) {
     case OBJ_INSTANCE:
       printf("%s instance",
              AS_INSTANCE(value)->klass->name->chars);
+      break;
+    case OBJ_MODULE:
+      printf("<module %s>", AS_MODULE(value)->name->chars);
       break;
     case OBJ_MAP: {
       ObjMap* map = AS_MAP(value);
