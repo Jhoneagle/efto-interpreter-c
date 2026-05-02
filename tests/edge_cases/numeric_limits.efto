@@ -1,0 +1,16 @@
+// Test numeric edge cases.
+
+// Large numbers (printed via %g format).
+print 999999999999; // expect: 1e+12
+
+// Negative zero.
+var nz = 0 * -1;
+print nz;       // expect: -0
+print nz == 0;  // expect: true
+
+// Moderate numbers stay precise.
+print 123456;   // expect: 123456
+print 99999;    // expect: 99999
+
+// Small decimals.
+print 0.1 + 0.2 == 0.3; // expect: false

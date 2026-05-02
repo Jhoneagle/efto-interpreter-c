@@ -1,0 +1,2 @@
+// Importing a nonexistent module should produce a clear error.
+import nonexistent_module_xyz; // expect runtime error: Could not find module 'nonexistent_module_xyz'.

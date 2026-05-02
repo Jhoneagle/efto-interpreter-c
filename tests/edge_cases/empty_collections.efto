@@ -1,0 +1,43 @@
+// Test edge cases with empty collections.
+
+// Empty array properties and methods.
+var arr = [];
+print arr.length; // expect: 0
+
+var mapped = arr.map((x) => x * 2);
+print mapped.length; // expect: 0
+
+var filtered = arr.filter((x) => true);
+print filtered.length; // expect: 0
+
+print arr.all((x) => false); // expect: true
+print arr.any((x) => true);  // expect: false
+print arr.find((x) => true); // expect: nil
+print arr.findIndex((x) => true); // expect: -1
+
+var count = 0;
+arr.forEach((x) => { count = count + 1; });
+print count; // expect: 0
+
+// Empty map properties and methods.
+var m = {};
+print m.size; // expect: 0
+
+var keys = m.keys();
+print keys.length; // expect: 0
+
+var vals = m.values();
+print vals.length; // expect: 0
+
+print m.all((k) => false); // expect: true
+print m.any((k) => true);  // expect: false
+print m.find((k) => true); // expect: nil
+
+// Empty string split.
+var parts = "".split(",");
+print parts.length; // expect: 1
+print parts[0];     // expect:
+
+// Pop from empty array should error.
+var empty = [];
+empty.pop(); // expect runtime error: Cannot pop from an empty array.

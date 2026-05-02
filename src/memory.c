@@ -252,6 +252,8 @@ static void markRoots() {
   markCompilerRoots();
   markValue(vm.currentException);
   markObject((Obj*)vm.initString);
+  markObject((Obj*)vm.lengthString);
+  markObject((Obj*)vm.sizeString);
   markObject((Obj*)vm.arrayMethods);
   markObject((Obj*)vm.fileMethods);
   markObject((Obj*)vm.mapMethods);

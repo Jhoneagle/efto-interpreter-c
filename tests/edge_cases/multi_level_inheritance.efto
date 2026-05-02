@@ -1,0 +1,54 @@
+// Test 3+ level inheritance chain with method overrides and super.
+
+class Animal {
+  init(name) {
+    this.name = name;
+  }
+  speak() {
+    return this.name + " makes a sound";
+  }
+  describe() {
+    return "I am " + this.name;
+  }
+}
+
+class Dog < Animal {
+  speak() {
+    return this.name + " barks";
+  }
+  fetch() {
+    return this.name + " fetches";
+  }
+}
+
+class Puppy < Dog {
+  speak() {
+    return this.name + " yips";
+  }
+  parentSpeak() {
+    return super.speak();
+  }
+  grandparentDescribe() {
+    return super.describe();
+  }
+}
+
+var p = Puppy("Rex");
+
+// Own method.
+print p.speak();  // expect: Rex yips
+
+// Inherited from Dog.
+print p.fetch();  // expect: Rex fetches
+
+// Inherited from Animal (skipping Dog).
+print p.describe(); // expect: I am Rex
+
+// Super calls.
+print p.parentSpeak();        // expect: Rex barks
+print p.grandparentDescribe(); // expect: I am Rex
+
+// Type checks via init chain.
+var d = Dog("Buddy");
+print d.speak();    // expect: Buddy barks
+print d.describe(); // expect: I am Buddy

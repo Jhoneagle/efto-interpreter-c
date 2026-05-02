@@ -46,6 +46,8 @@ typedef struct {
   Table globals;
   Table strings;
   ObjString* initString;
+  ObjString* lengthString;
+  ObjString* sizeString;
   ObjClass* arrayMethods;
   ObjClass* fileMethods;
   ObjClass* mapMethods;
@@ -79,5 +81,9 @@ InterpretResult interpret(const char* source);
 void push(Value value);
 Value pop();
 char* readFile(const char* path);
+void runtimeError(const char* format, ...);
+bool vmCallValue(Value callee, int argCount, Value* result);
+int getCallableArity(Value callee);
+bool callValue(Value callee, int argCount);
 
 #endif

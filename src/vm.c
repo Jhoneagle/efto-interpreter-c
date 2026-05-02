@@ -1,11 +1,10 @@
-#include <ctype.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
+#include "builtins.h"
 #include "common.h"
 #include "compiler.h"
 #include "debug.h"
@@ -16,1180 +15,13 @@
 
 VM vm;
 
-static void runtimeError(const char* format, ...);
 static void closeUpvalues(Value* last);
 static ObjString* stringify(Value value);
-static bool callValue(Value callee, int argCount);
-static bool vmCallValue(Value callee, int argCount, Value* result);
-static int getCallableArity(Value callee);
 static InterpretResult run(int baseFrame);
 
-static Value clockNative(int argCount, Value* args) {
-  return NUMBER_VAL((double)clock() / CLOCKS_PER_SEC);
-}
-
-// --- Array native methods ---
-
-static bool arrayPush(Value receiver, int argCount, Value* args,
-                      Value* result) {
-  ObjArray* array = AS_ARRAY(receiver);
-  writeValueArray(&array->elements, args[0]);
-  *result = NIL_VAL;
-  return true;
-}
-
-static bool arrayPop(Value receiver, int argCount, Value* args,
-                     Value* result) {
-  ObjArray* array = AS_ARRAY(receiver);
-  if (array->elements.count == 0) {
-    runtimeError("Cannot pop from an empty array.");
-    return false;
-  }
-  *result = array->elements.values[--array->elements.count];
-  return true;
-}
-
-static bool arraySlice(Value receiver, int argCount, Value* args,
-                       Value* result) {
-  ObjArray* array = AS_ARRAY(receiver);
-
-  if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
-    runtimeError("Slice arguments must be numbers.");
-    return false;
-  }
-
-  int start = (int)AS_NUMBER(args[0]);
-  int end = (int)AS_NUMBER(args[1]);
-  int length = array->elements.count;
-
-  if (start < 0) start = 0;
-  if (end > length) end = length;
-  if (start > end) start = end;
-
-  ObjArray* sliced = newArray();
-  push(OBJ_VAL(sliced)); // GC protection
-  for (int i = start; i < end; i++) {
-    writeValueArray(&sliced->elements, array->elements.values[i]);
-  }
-  pop(); // remove GC protection
-
-  *result = OBJ_VAL(sliced);
-  return true;
-}
-
-// --- Map native methods ---
-
-static bool mapHas(Value receiver, int argCount, Value* args,
-                   Value* result) {
-  ObjMap* map = AS_MAP(receiver);
-  Value dummy;
-  *result = BOOL_VAL(valueTableGet(&map->entries, args[0], &dummy));
-  return true;
-}
-
-static bool mapKeys(Value receiver, int argCount, Value* args,
-                    Value* result) {
-  ObjMap* map = AS_MAP(receiver);
-  ObjArray* keys = newArray();
-  push(OBJ_VAL(keys)); // GC protection
-  for (int i = 0; i < map->entries.capacity; i++) {
-    ValueEntry* entry = &map->entries.entries[i];
-    if (entry->occupied) {
-      writeValueArray(&keys->elements, entry->key);
-    }
-  }
-  pop();
-  *result = OBJ_VAL(keys);
-  return true;
-}
-
-static bool mapValues(Value receiver, int argCount, Value* args,
-                      Value* result) {
-  ObjMap* map = AS_MAP(receiver);
-  ObjArray* values = newArray();
-  push(OBJ_VAL(values)); // GC protection
-  for (int i = 0; i < map->entries.capacity; i++) {
-    ValueEntry* entry = &map->entries.entries[i];
-    if (entry->occupied) {
-      writeValueArray(&values->elements, entry->value);
-    }
-  }
-  pop();
-  *result = OBJ_VAL(values);
-  return true;
-}
-
-static bool mapRemove(Value receiver, int argCount, Value* args,
-                      Value* result) {
-  ObjMap* map = AS_MAP(receiver);
-  *result = BOOL_VAL(valueTableDelete(&map->entries, args[0]));
-  return true;
-}
-
-// --- Higher-order map methods ---
-
-static bool mapForEach(Value receiver, int argCount, Value* args,
-                       Value* result) {
-  ObjMap* map = AS_MAP(receiver);
-  Value callback = args[0];
-  int cbArity = getCallableArity(callback);
-  int passArgs = (cbArity >= 2) ? 2 : 1;
-
-  push(receiver);
-  push(callback);
-
-  for (int i = 0; i < map->entries.capacity; i++) {
-    ObjMap* src = AS_MAP(vm.stackTop[-2]);
-    ValueEntry* entry = &src->entries.entries[i];
-    if (!entry->occupied) continue;
-
-    Value cb = vm.stackTop[-1];
-    push(cb);
-    push(entry->key);
-    if (passArgs >= 2) push(entry->value);
-
-    Value dummy;
-    if (!vmCallValue(cb, passArgs, &dummy)) {
-      vm.stackTop -= 2;
-      return false;
-    }
-  }
-
-  vm.stackTop -= 2;
-  *result = NIL_VAL;
-  return true;
-}
-
-static bool mapMapMethod(Value receiver, int argCount, Value* args,
-                         Value* result) {
-  ObjMap* map = AS_MAP(receiver);
-  Value callback = args[0];
-  int cbArity = getCallableArity(callback);
-  int passArgs = (cbArity >= 2) ? 2 : 1;
-
-  ObjMap* resultMap = newMap();
-
-  push(receiver);
-  push(callback);
-  push(OBJ_VAL(resultMap));
-
-  for (int i = 0; i < map->entries.capacity; i++) {
-    ObjMap* src = AS_MAP(vm.stackTop[-3]);
-    ValueEntry* entry = &src->entries.entries[i];
-    if (!entry->occupied) continue;
-
-    Value cb = vm.stackTop[-2];
-    push(cb);
-    push(entry->key);
-    if (passArgs >= 2) push(entry->value);
-
-    Value mapped;
-    if (!vmCallValue(cb, passArgs, &mapped)) {
-      vm.stackTop -= 3;
-      return false;
-    }
-
-    ObjMap* dst = AS_MAP(vm.stackTop[-1]);
-    src = AS_MAP(vm.stackTop[-3]);
-    valueTableSet(&dst->entries, src->entries.entries[i].key, mapped);
-  }
-
-  *result = vm.stackTop[-1];
-  vm.stackTop -= 3;
-  return true;
-}
-
-static bool mapFilter(Value receiver, int argCount, Value* args,
-                      Value* result) {
-  ObjMap* map = AS_MAP(receiver);
-  Value callback = args[0];
-  int cbArity = getCallableArity(callback);
-  int passArgs = (cbArity >= 2) ? 2 : 1;
-
-  ObjMap* resultMap = newMap();
-
-  push(receiver);
-  push(callback);
-  push(OBJ_VAL(resultMap));
-
-  for (int i = 0; i < map->entries.capacity; i++) {
-    ObjMap* src = AS_MAP(vm.stackTop[-3]);
-    ValueEntry* entry = &src->entries.entries[i];
-    if (!entry->occupied) continue;
-
-    Value cb = vm.stackTop[-2];
-    push(cb);
-    push(entry->key);
-    if (passArgs >= 2) push(entry->value);
-
-    Value test;
-    if (!vmCallValue(cb, passArgs, &test)) {
-      vm.stackTop -= 3;
-      return false;
-    }
-
-    if (!IS_NIL(test) && !(IS_BOOL(test) && !AS_BOOL(test))) {
-      ObjMap* dst = AS_MAP(vm.stackTop[-1]);
-      src = AS_MAP(vm.stackTop[-3]);
-      valueTableSet(&dst->entries, src->entries.entries[i].key,
-                    src->entries.entries[i].value);
-    }
-  }
-
-  *result = vm.stackTop[-1];
-  vm.stackTop -= 3;
-  return true;
-}
-
-static bool mapReduce(Value receiver, int argCount, Value* args,
-                      Value* result) {
-  ObjMap* map = AS_MAP(receiver);
-  Value callback = args[0];
-  Value accumulator;
-  bool hasInit = (argCount == 2);
-
-  if (hasInit) {
-    accumulator = args[1];
-  } else {
-    if (map->entries.liveCount == 0) {
-      runtimeError("reduce() of empty map with no initial value.");
-      return false;
-    }
-    // Use first entry's value as initial accumulator.
-    for (int i = 0; i < map->entries.capacity; i++) {
-      if (map->entries.entries[i].occupied) {
-        accumulator = map->entries.entries[i].value;
-        break;
-      }
-    }
-  }
-
-  int cbArity = getCallableArity(callback);
-  int passArgs = (cbArity >= 3) ? 3 : 2;
-  bool skipFirst = !hasInit;
-
-  push(receiver);
-  push(callback);
-  push(accumulator);
-
-  for (int i = 0; i < map->entries.capacity; i++) {
-    ObjMap* src = AS_MAP(vm.stackTop[-3]);
-    ValueEntry* entry = &src->entries.entries[i];
-    if (!entry->occupied) continue;
-
-    if (skipFirst) {
-      skipFirst = false;
-      continue;
-    }
-
-    Value cb = vm.stackTop[-2];
-    Value acc = vm.stackTop[-1];
-
-    push(cb);
-    push(acc);
-    push(entry->key);
-    if (passArgs >= 3) push(entry->value);
-
-    Value reduced;
-    if (!vmCallValue(cb, passArgs, &reduced)) {
-      vm.stackTop -= 3;
-      return false;
-    }
-
-    vm.stackTop[-1] = reduced;
-  }
-
-  *result = vm.stackTop[-1];
-  vm.stackTop -= 3;
-  return true;
-}
-
-static bool mapFind(Value receiver, int argCount, Value* args,
-                    Value* result) {
-  ObjMap* map = AS_MAP(receiver);
-  Value callback = args[0];
-  int cbArity = getCallableArity(callback);
-  int passArgs = (cbArity >= 2) ? 2 : 1;
-
-  push(receiver);
-  push(callback);
-
-  for (int i = 0; i < map->entries.capacity; i++) {
-    ObjMap* src = AS_MAP(vm.stackTop[-2]);
-    ValueEntry* entry = &src->entries.entries[i];
-    if (!entry->occupied) continue;
-
-    Value cb = vm.stackTop[-1];
-    push(cb);
-    push(entry->key);
-    if (passArgs >= 2) push(entry->value);
-
-    Value test;
-    if (!vmCallValue(cb, passArgs, &test)) {
-      vm.stackTop -= 2;
-      return false;
-    }
-
-    if (!IS_NIL(test) && !(IS_BOOL(test) && !AS_BOOL(test))) {
-      src = AS_MAP(vm.stackTop[-2]);
-      *result = src->entries.entries[i].value;
-      vm.stackTop -= 2;
-      return true;
-    }
-  }
-
-  vm.stackTop -= 2;
-  *result = NIL_VAL;
-  return true;
-}
-
-static bool mapAny(Value receiver, int argCount, Value* args,
-                   Value* result) {
-  ObjMap* map = AS_MAP(receiver);
-  Value callback = args[0];
-  int cbArity = getCallableArity(callback);
-  int passArgs = (cbArity >= 2) ? 2 : 1;
-
-  push(receiver);
-  push(callback);
-
-  for (int i = 0; i < map->entries.capacity; i++) {
-    ObjMap* src = AS_MAP(vm.stackTop[-2]);
-    ValueEntry* entry = &src->entries.entries[i];
-    if (!entry->occupied) continue;
-
-    Value cb = vm.stackTop[-1];
-    push(cb);
-    push(entry->key);
-    if (passArgs >= 2) push(entry->value);
-
-    Value test;
-    if (!vmCallValue(cb, passArgs, &test)) {
-      vm.stackTop -= 2;
-      return false;
-    }
-
-    if (!IS_NIL(test) && !(IS_BOOL(test) && !AS_BOOL(test))) {
-      vm.stackTop -= 2;
-      *result = BOOL_VAL(true);
-      return true;
-    }
-  }
-
-  vm.stackTop -= 2;
-  *result = BOOL_VAL(false);
-  return true;
-}
-
-static bool mapAll(Value receiver, int argCount, Value* args,
-                   Value* result) {
-  ObjMap* map = AS_MAP(receiver);
-  Value callback = args[0];
-  int cbArity = getCallableArity(callback);
-  int passArgs = (cbArity >= 2) ? 2 : 1;
-
-  push(receiver);
-  push(callback);
-
-  for (int i = 0; i < map->entries.capacity; i++) {
-    ObjMap* src = AS_MAP(vm.stackTop[-2]);
-    ValueEntry* entry = &src->entries.entries[i];
-    if (!entry->occupied) continue;
-
-    Value cb = vm.stackTop[-1];
-    push(cb);
-    push(entry->key);
-    if (passArgs >= 2) push(entry->value);
-
-    Value test;
-    if (!vmCallValue(cb, passArgs, &test)) {
-      vm.stackTop -= 2;
-      return false;
-    }
-
-    if (IS_NIL(test) || (IS_BOOL(test) && !AS_BOOL(test))) {
-      vm.stackTop -= 2;
-      *result = BOOL_VAL(false);
-      return true;
-    }
-  }
-
-  vm.stackTop -= 2;
-  *result = BOOL_VAL(true);
-  return true;
-}
-
-// --- String native methods ---
-
-static bool stringSubstring(Value receiver, int argCount, Value* args,
-                            Value* result) {
-  ObjString* str = AS_STRING(receiver);
-  if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
-    runtimeError("Substring arguments must be numbers.");
-    return false;
-  }
-  int start = (int)AS_NUMBER(args[0]);
-  int end = (int)AS_NUMBER(args[1]);
-  if (start < 0) start = 0;
-  if (end > str->length) end = str->length;
-  if (start > end) start = end;
-  *result = OBJ_VAL(copyString(str->chars + start, end - start));
-  return true;
-}
-
-static bool stringIndexOf(Value receiver, int argCount, Value* args,
-                           Value* result) {
-  ObjString* str = AS_STRING(receiver);
-  if (!IS_STRING(args[0])) {
-    runtimeError("indexOf argument must be a string.");
-    return false;
-  }
-  ObjString* search = AS_STRING(args[0]);
-  char* found = strstr(str->chars, search->chars);
-  *result = NUMBER_VAL(found == NULL ? -1 : (double)(found - str->chars));
-  return true;
-}
-
-static bool stringToUpper(Value receiver, int argCount, Value* args,
-                           Value* result) {
-  ObjString* str = AS_STRING(receiver);
-  char* upper = ALLOCATE(char, str->length + 1);
-  for (int i = 0; i < str->length; i++) {
-    upper[i] = (char)toupper((unsigned char)str->chars[i]);
-  }
-  upper[str->length] = '\0';
-  *result = OBJ_VAL(takeString(upper, str->length));
-  return true;
-}
-
-static bool stringToLower(Value receiver, int argCount, Value* args,
-                           Value* result) {
-  ObjString* str = AS_STRING(receiver);
-  char* lower = ALLOCATE(char, str->length + 1);
-  for (int i = 0; i < str->length; i++) {
-    lower[i] = (char)tolower((unsigned char)str->chars[i]);
-  }
-  lower[str->length] = '\0';
-  *result = OBJ_VAL(takeString(lower, str->length));
-  return true;
-}
-
-static bool stringSplit(Value receiver, int argCount, Value* args,
-                        Value* result) {
-  ObjString* str = AS_STRING(receiver);
-  if (!IS_STRING(args[0])) {
-    runtimeError("Split delimiter must be a string.");
-    return false;
-  }
-  ObjString* delim = AS_STRING(args[0]);
-
-  ObjArray* array = newArray();
-  push(OBJ_VAL(array)); // GC protection
-
-  if (delim->length == 0) {
-    for (int i = 0; i < str->length; i++) {
-      writeValueArray(&array->elements,
-                      OBJ_VAL(copyString(str->chars + i, 1)));
-    }
-  } else {
-    const char* start = str->chars;
-    const char* end = str->chars + str->length;
-    const char* pos;
-    while ((pos = strstr(start, delim->chars)) != NULL) {
-      writeValueArray(&array->elements,
-                      OBJ_VAL(copyString(start, (int)(pos - start))));
-      start = pos + delim->length;
-    }
-    writeValueArray(&array->elements,
-                    OBJ_VAL(copyString(start, (int)(end - start))));
-  }
-
-  pop(); // remove GC protection
-  *result = OBJ_VAL(array);
-  return true;
-}
-
-static bool stringTrim(Value receiver, int argCount, Value* args,
-                       Value* result) {
-  ObjString* str = AS_STRING(receiver);
-  const char* start = str->chars;
-  const char* end = str->chars + str->length;
-
-  while (start < end && (*start == ' ' || *start == '\t' ||
-                          *start == '\r' || *start == '\n')) start++;
-  while (end > start && (end[-1] == ' ' || end[-1] == '\t' ||
-                          end[-1] == '\r' || end[-1] == '\n')) end--;
-
-  *result = OBJ_VAL(copyString(start, (int)(end - start)));
-  return true;
-}
-
-// --- VM callback helpers ---
-
-static bool vmCallValue(Value callee, int argCount, Value* result) {
-  int framesBefore = vm.frameCount;
-  if (!callValue(callee, argCount)) return false;
-  if (vm.frameCount > framesBefore) {
-    InterpretResult r = run(framesBefore);
-    if (r != INTERPRET_OK) return false;
-  }
-  *result = pop();
-  return true;
-}
-
-static int getCallableArity(Value callee) {
-  if (IS_OBJ(callee)) {
-    switch (OBJ_TYPE(callee)) {
-      case OBJ_CLOSURE:
-        return AS_CLOSURE(callee)->function->arity;
-      case OBJ_BOUND_METHOD:
-        return AS_BOUND_METHOD(callee)->method->function->arity;
-      default: break;
-    }
-  }
-  return -1;
-}
-
-// --- Higher-order array methods ---
-
-static bool arrayMap(Value receiver, int argCount, Value* args,
-                     Value* result) {
-  ObjArray* array = AS_ARRAY(receiver);
-  Value callback = args[0];
-  int cbArity = getCallableArity(callback);
-  int passArgs = (cbArity >= 2) ? 2 : 1;
-
-  int length = array->elements.count;
-  ObjArray* resultArray = newArray();
-
-  push(receiver);
-  push(callback);
-  push(OBJ_VAL(resultArray));
-
-  for (int i = 0; i < length; i++) {
-    ObjArray* src = AS_ARRAY(vm.stackTop[-3]);
-    Value cb = vm.stackTop[-2];
-
-    push(cb);
-    push(src->elements.values[i]);
-    if (passArgs >= 2) push(NUMBER_VAL(i));
-
-    Value mapped;
-    if (!vmCallValue(cb, passArgs, &mapped)) {
-      vm.stackTop -= 3;
-      return false;
-    }
-
-    ObjArray* dst = AS_ARRAY(vm.stackTop[-1]);
-    writeValueArray(&dst->elements, mapped);
-  }
-
-  *result = vm.stackTop[-1];
-  vm.stackTop -= 3;
-  return true;
-}
-
-static bool arrayFilter(Value receiver, int argCount, Value* args,
-                        Value* result) {
-  ObjArray* array = AS_ARRAY(receiver);
-  Value callback = args[0];
-  int cbArity = getCallableArity(callback);
-  int passArgs = (cbArity >= 2) ? 2 : 1;
-
-  int length = array->elements.count;
-  ObjArray* resultArray = newArray();
-
-  push(receiver);
-  push(callback);
-  push(OBJ_VAL(resultArray));
-
-  for (int i = 0; i < length; i++) {
-    ObjArray* src = AS_ARRAY(vm.stackTop[-3]);
-    Value cb = vm.stackTop[-2];
-    Value element = src->elements.values[i];
-
-    push(cb);
-    push(element);
-    if (passArgs >= 2) push(NUMBER_VAL(i));
-
-    Value test;
-    if (!vmCallValue(cb, passArgs, &test)) {
-      vm.stackTop -= 3;
-      return false;
-    }
-
-    if (!IS_NIL(test) && !(IS_BOOL(test) && !AS_BOOL(test))) {
-      ObjArray* dst = AS_ARRAY(vm.stackTop[-1]);
-      src = AS_ARRAY(vm.stackTop[-3]);
-      writeValueArray(&dst->elements, src->elements.values[i]);
-    }
-  }
-
-  *result = vm.stackTop[-1];
-  vm.stackTop -= 3;
-  return true;
-}
-
-static bool arrayReduce(Value receiver, int argCount, Value* args,
-                        Value* result) {
-  ObjArray* array = AS_ARRAY(receiver);
-  Value callback = args[0];
-  int startIndex;
-  Value accumulator;
-
-  if (argCount == 2) {
-    accumulator = args[1];
-    startIndex = 0;
-  } else {
-    if (array->elements.count == 0) {
-      runtimeError("reduce() of empty array with no initial value.");
-      return false;
-    }
-    accumulator = array->elements.values[0];
-    startIndex = 1;
-  }
-
-  int cbArity = getCallableArity(callback);
-  int passArgs = (cbArity >= 3) ? 3 : 2;
-  int length = array->elements.count;
-
-  push(receiver);
-  push(callback);
-  push(accumulator);
-
-  for (int i = startIndex; i < length; i++) {
-    ObjArray* src = AS_ARRAY(vm.stackTop[-3]);
-    Value cb = vm.stackTop[-2];
-    Value acc = vm.stackTop[-1];
-
-    push(cb);
-    push(acc);
-    push(src->elements.values[i]);
-    if (passArgs >= 3) push(NUMBER_VAL(i));
-
-    Value reduced;
-    if (!vmCallValue(cb, passArgs, &reduced)) {
-      vm.stackTop -= 3;
-      return false;
-    }
-
-    vm.stackTop[-1] = reduced;
-  }
-
-  *result = vm.stackTop[-1];
-  vm.stackTop -= 3;
-  return true;
-}
-
-static bool arrayForEach(Value receiver, int argCount, Value* args,
-                         Value* result) {
-  ObjArray* array = AS_ARRAY(receiver);
-  Value callback = args[0];
-  int cbArity = getCallableArity(callback);
-  int passArgs = (cbArity >= 2) ? 2 : 1;
-  int length = array->elements.count;
-
-  push(receiver);
-  push(callback);
-
-  for (int i = 0; i < length; i++) {
-    ObjArray* src = AS_ARRAY(vm.stackTop[-2]);
-    Value cb = vm.stackTop[-1];
-
-    push(cb);
-    push(src->elements.values[i]);
-    if (passArgs >= 2) push(NUMBER_VAL(i));
-
-    Value dummy;
-    if (!vmCallValue(cb, passArgs, &dummy)) {
-      vm.stackTop -= 2;
-      return false;
-    }
-  }
-
-  vm.stackTop -= 2;
-  *result = NIL_VAL;
-  return true;
-}
-
-static bool arrayFind(Value receiver, int argCount, Value* args,
-                      Value* result) {
-  ObjArray* array = AS_ARRAY(receiver);
-  Value callback = args[0];
-  int cbArity = getCallableArity(callback);
-  int passArgs = (cbArity >= 2) ? 2 : 1;
-  int length = array->elements.count;
-
-  push(receiver);
-  push(callback);
-
-  for (int i = 0; i < length; i++) {
-    ObjArray* src = AS_ARRAY(vm.stackTop[-2]);
-    Value cb = vm.stackTop[-1];
-    Value element = src->elements.values[i];
-
-    push(cb);
-    push(element);
-    if (passArgs >= 2) push(NUMBER_VAL(i));
-
-    Value test;
-    if (!vmCallValue(cb, passArgs, &test)) {
-      vm.stackTop -= 2;
-      return false;
-    }
-
-    if (!IS_NIL(test) && !(IS_BOOL(test) && !AS_BOOL(test))) {
-      src = AS_ARRAY(vm.stackTop[-2]);
-      *result = src->elements.values[i];
-      vm.stackTop -= 2;
-      return true;
-    }
-  }
-
-  vm.stackTop -= 2;
-  *result = NIL_VAL;
-  return true;
-}
-
-static bool arrayFindIndex(Value receiver, int argCount, Value* args,
-                           Value* result) {
-  ObjArray* array = AS_ARRAY(receiver);
-  Value callback = args[0];
-  int cbArity = getCallableArity(callback);
-  int passArgs = (cbArity >= 2) ? 2 : 1;
-  int length = array->elements.count;
-
-  push(receiver);
-  push(callback);
-
-  for (int i = 0; i < length; i++) {
-    ObjArray* src = AS_ARRAY(vm.stackTop[-2]);
-    Value cb = vm.stackTop[-1];
-
-    push(cb);
-    push(src->elements.values[i]);
-    if (passArgs >= 2) push(NUMBER_VAL(i));
-
-    Value test;
-    if (!vmCallValue(cb, passArgs, &test)) {
-      vm.stackTop -= 2;
-      return false;
-    }
-
-    if (!IS_NIL(test) && !(IS_BOOL(test) && !AS_BOOL(test))) {
-      vm.stackTop -= 2;
-      *result = NUMBER_VAL(i);
-      return true;
-    }
-  }
-
-  vm.stackTop -= 2;
-  *result = NUMBER_VAL(-1);
-  return true;
-}
-
-static bool arrayAll(Value receiver, int argCount, Value* args,
-                     Value* result) {
-  ObjArray* array = AS_ARRAY(receiver);
-  Value callback = args[0];
-  int cbArity = getCallableArity(callback);
-  int passArgs = (cbArity >= 2) ? 2 : 1;
-  int length = array->elements.count;
-
-  push(receiver);
-  push(callback);
-
-  for (int i = 0; i < length; i++) {
-    ObjArray* src = AS_ARRAY(vm.stackTop[-2]);
-    Value cb = vm.stackTop[-1];
-
-    push(cb);
-    push(src->elements.values[i]);
-    if (passArgs >= 2) push(NUMBER_VAL(i));
-
-    Value test;
-    if (!vmCallValue(cb, passArgs, &test)) {
-      vm.stackTop -= 2;
-      return false;
-    }
-
-    if (IS_NIL(test) || (IS_BOOL(test) && !AS_BOOL(test))) {
-      vm.stackTop -= 2;
-      *result = BOOL_VAL(false);
-      return true;
-    }
-  }
-
-  vm.stackTop -= 2;
-  *result = BOOL_VAL(true);
-  return true;
-}
-
-static bool arrayAny(Value receiver, int argCount, Value* args,
-                     Value* result) {
-  ObjArray* array = AS_ARRAY(receiver);
-  Value callback = args[0];
-  int cbArity = getCallableArity(callback);
-  int passArgs = (cbArity >= 2) ? 2 : 1;
-  int length = array->elements.count;
-
-  push(receiver);
-  push(callback);
-
-  for (int i = 0; i < length; i++) {
-    ObjArray* src = AS_ARRAY(vm.stackTop[-2]);
-    Value cb = vm.stackTop[-1];
-
-    push(cb);
-    push(src->elements.values[i]);
-    if (passArgs >= 2) push(NUMBER_VAL(i));
-
-    Value test;
-    if (!vmCallValue(cb, passArgs, &test)) {
-      vm.stackTop -= 2;
-      return false;
-    }
-
-    if (!IS_NIL(test) && !(IS_BOOL(test) && !AS_BOOL(test))) {
-      vm.stackTop -= 2;
-      *result = BOOL_VAL(true);
-      return true;
-    }
-  }
-
-  vm.stackTop -= 2;
-  *result = BOOL_VAL(false);
-  return true;
-}
-
-// --- Native functions ---
-
-static Value typeNative(int argCount, Value* args) {
-  if (argCount == 0) return OBJ_VAL(copyString("nil", 3));
-  Value value = args[0];
-
-  if (IS_NIL(value))    return OBJ_VAL(copyString("nil", 3));
-  if (IS_BOOL(value))   return OBJ_VAL(copyString("bool", 4));
-  if (IS_NUMBER(value)) return OBJ_VAL(copyString("number", 6));
-
-  if (IS_OBJ(value)) {
-    switch (OBJ_TYPE(value)) {
-      case OBJ_STRING:        return OBJ_VAL(copyString("string", 6));
-      case OBJ_ARRAY:         return OBJ_VAL(copyString("array", 5));
-      case OBJ_MAP:           return OBJ_VAL(copyString("map", 3));
-      case OBJ_CLASS:         return OBJ_VAL(copyString("class", 5));
-      case OBJ_FILE:          return OBJ_VAL(copyString("file", 4));
-      case OBJ_INSTANCE:      return OBJ_VAL(copyString("instance", 8));
-      case OBJ_MODULE:        return OBJ_VAL(copyString("module", 6));
-      case OBJ_FUNCTION:
-      case OBJ_CLOSURE:
-      case OBJ_NATIVE:
-      case OBJ_NATIVE_METHOD:
-      case OBJ_BOUND_METHOD:  return OBJ_VAL(copyString("function", 8));
-      default: break;
-    }
-  }
-  return OBJ_VAL(copyString("unknown", 7));
-}
-
-static Value sqrtNative(int argCount, Value* args) {
-  if (argCount != 1 || !IS_NUMBER(args[0])) {
-    runtimeError("sqrt() expects a number argument.");
-    return NIL_VAL;
-  }
-  return NUMBER_VAL(sqrt(AS_NUMBER(args[0])));
-}
-
-static Value absNative(int argCount, Value* args) {
-  if (argCount != 1 || !IS_NUMBER(args[0])) {
-    runtimeError("abs() expects a number argument.");
-    return NIL_VAL;
-  }
-  return NUMBER_VAL(fabs(AS_NUMBER(args[0])));
-}
-
-static Value floorNative(int argCount, Value* args) {
-  if (argCount != 1 || !IS_NUMBER(args[0])) {
-    runtimeError("floor() expects a number argument.");
-    return NIL_VAL;
-  }
-  return NUMBER_VAL(floor(AS_NUMBER(args[0])));
-}
-
-static Value ceilNative(int argCount, Value* args) {
-  if (argCount != 1 || !IS_NUMBER(args[0])) {
-    runtimeError("ceil() expects a number argument.");
-    return NIL_VAL;
-  }
-  return NUMBER_VAL(ceil(AS_NUMBER(args[0])));
-}
-
-static Value roundNative(int argCount, Value* args) {
-  if (argCount != 1 || !IS_NUMBER(args[0])) {
-    runtimeError("round() expects a number argument.");
-    return NIL_VAL;
-  }
-  return NUMBER_VAL(round(AS_NUMBER(args[0])));
-}
-
-static Value minNative(int argCount, Value* args) {
-  if (argCount != 2 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
-    runtimeError("min() expects two number arguments.");
-    return NIL_VAL;
-  }
-  double a = AS_NUMBER(args[0]), b = AS_NUMBER(args[1]);
-  return NUMBER_VAL(a < b ? a : b);
-}
-
-static Value maxNative(int argCount, Value* args) {
-  if (argCount != 2 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
-    runtimeError("max() expects two number arguments.");
-    return NIL_VAL;
-  }
-  double a = AS_NUMBER(args[0]), b = AS_NUMBER(args[1]);
-  return NUMBER_VAL(a > b ? a : b);
-}
-
-static Value powNative(int argCount, Value* args) {
-  if (argCount != 2 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
-    runtimeError("pow() expects two number arguments.");
-    return NIL_VAL;
-  }
-  return NUMBER_VAL(pow(AS_NUMBER(args[0]), AS_NUMBER(args[1])));
-}
-
-static Value randomNative(int argCount, Value* args) {
-  return NUMBER_VAL((double)rand() / RAND_MAX);
-}
-
-static Value parseIntNative(int argCount, Value* args) {
-  if (argCount != 1 || !IS_STRING(args[0])) {
-    runtimeError("parseInt() expects a string argument.");
-    return NIL_VAL;
-  }
-  char* end;
-  double result = strtod(AS_STRING(args[0])->chars, &end);
-  if (end == AS_STRING(args[0])->chars) return NIL_VAL;
-  return NUMBER_VAL(result);
-}
-
-// --- File handle methods ---
-
-static bool fileRead(Value receiver, int argCount, Value* args,
-                     Value* result) {
-  ObjFile* file = AS_FILE(receiver);
-  if (!file->isOpen) {
-    runtimeError("Cannot read from a closed file.");
-    return false;
-  }
-
-  long current = ftell(file->file);
-  fseek(file->file, 0L, SEEK_END);
-  long end = ftell(file->file);
-  fseek(file->file, current, SEEK_SET);
-
-  size_t remaining = (size_t)(end - current);
-  char* buffer = ALLOCATE(char, remaining + 1);
-  size_t bytesRead = fread(buffer, 1, remaining, file->file);
-  buffer[bytesRead] = '\0';
-
-  *result = OBJ_VAL(takeString(buffer, (int)bytesRead));
-  return true;
-}
-
-static bool fileReadLine(Value receiver, int argCount, Value* args,
-                         Value* result) {
-  ObjFile* file = AS_FILE(receiver);
-  if (!file->isOpen) {
-    runtimeError("Cannot read from a closed file.");
-    return false;
-  }
-
-  char buffer[4096];
-  if (fgets(buffer, sizeof(buffer), file->file) == NULL) {
-    *result = NIL_VAL;
-    return true;
-  }
-
-  // Strip trailing newline.
-  int len = (int)strlen(buffer);
-  if (len > 0 && buffer[len - 1] == '\n') {
-    len--;
-    if (len > 0 && buffer[len - 1] == '\r') len--;
-  }
-
-  *result = OBJ_VAL(copyString(buffer, len));
-  return true;
-}
-
-static bool fileWrite(Value receiver, int argCount, Value* args,
-                      Value* result) {
-  ObjFile* file = AS_FILE(receiver);
-  if (!file->isOpen) {
-    runtimeError("Cannot write to a closed file.");
-    return false;
-  }
-  if (!IS_STRING(args[0])) {
-    runtimeError("write() expects a string argument.");
-    return false;
-  }
-
-  ObjString* str = AS_STRING(args[0]);
-  fwrite(str->chars, 1, str->length, file->file);
-  fflush(file->file);
-  *result = NIL_VAL;
-  return true;
-}
-
-static bool fileClose(Value receiver, int argCount, Value* args,
-                      Value* result) {
-  ObjFile* file = AS_FILE(receiver);
-  if (file->isOpen && file->file != NULL) {
-    fclose(file->file);
-    file->file = NULL;
-    file->isOpen = false;
-  }
-  *result = NIL_VAL;
-  return true;
-}
-
-// --- I/O native functions ---
-
-static Value ioInputNative(int argCount, Value* args) {
-  if (argCount > 0 && IS_STRING(args[0])) {
-    printf("%s", AS_STRING(args[0])->chars);
-    fflush(stdout);
-  }
-
-  char buffer[4096];
-  if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
-    return NIL_VAL;
-  }
-
-  int len = (int)strlen(buffer);
-  if (len > 0 && buffer[len - 1] == '\n') {
-    len--;
-    if (len > 0 && buffer[len - 1] == '\r') len--;
-  }
-
-  return OBJ_VAL(copyString(buffer, len));
-}
-
-static Value ioReadFileNative(int argCount, Value* args) {
-  if (argCount != 1 || !IS_STRING(args[0])) {
-    runtimeError("readFile() expects a string path argument.");
-    return NIL_VAL;
-  }
-
-  FILE* file = fopen(AS_CSTRING(args[0]), "r");
-  if (file == NULL) {
-    runtimeError("Could not read file '%s'.", AS_CSTRING(args[0]));
-    return NIL_VAL;
-  }
-
-  fseek(file, 0L, SEEK_END);
-  long fileSize = ftell(file);
-  rewind(file);
-
-  char* buffer = ALLOCATE(char, fileSize + 1);
-  size_t bytesRead = fread(buffer, 1, fileSize, file);
-  fclose(file);
-  buffer[bytesRead] = '\0';
-
-  return OBJ_VAL(takeString(buffer, (int)bytesRead));
-}
-
-static Value ioWriteFileNative(int argCount, Value* args) {
-  if (argCount != 2 || !IS_STRING(args[0]) || !IS_STRING(args[1])) {
-    runtimeError("writeFile() expects (path, content) string arguments.");
-    return NIL_VAL;
-  }
-
-  FILE* file = fopen(AS_CSTRING(args[0]), "w");
-  if (file == NULL) {
-    runtimeError("Could not open file '%s' for writing.",
-                 AS_CSTRING(args[0]));
-    return NIL_VAL;
-  }
-
-  ObjString* content = AS_STRING(args[1]);
-  fwrite(content->chars, 1, content->length, file);
-  fclose(file);
-  return NIL_VAL;
-}
-
-static Value ioAppendFileNative(int argCount, Value* args) {
-  if (argCount != 2 || !IS_STRING(args[0]) || !IS_STRING(args[1])) {
-    runtimeError("appendFile() expects (path, content) string arguments.");
-    return NIL_VAL;
-  }
-
-  FILE* file = fopen(AS_CSTRING(args[0]), "a");
-  if (file == NULL) {
-    runtimeError("Could not open file '%s' for appending.",
-                 AS_CSTRING(args[0]));
-    return NIL_VAL;
-  }
-
-  ObjString* content = AS_STRING(args[1]);
-  fwrite(content->chars, 1, content->length, file);
-  fclose(file);
-  return NIL_VAL;
-}
-
-static Value ioFileExistsNative(int argCount, Value* args) {
-  if (argCount != 1 || !IS_STRING(args[0])) {
-    runtimeError("fileExists() expects a string path argument.");
-    return NIL_VAL;
-  }
-
-  FILE* file = fopen(AS_CSTRING(args[0]), "r");
-  if (file != NULL) {
-    fclose(file);
-    return BOOL_VAL(true);
-  }
-  return BOOL_VAL(false);
-}
-
-static Value ioDeleteFileNative(int argCount, Value* args) {
-  if (argCount != 1 || !IS_STRING(args[0])) {
-    runtimeError("deleteFile() expects a string path argument.");
-    return NIL_VAL;
-  }
-
-  return BOOL_VAL(remove(AS_CSTRING(args[0])) == 0);
-}
-
-static Value ioOpenNative(int argCount, Value* args) {
-  if (argCount != 2 || !IS_STRING(args[0]) || !IS_STRING(args[1])) {
-    runtimeError("open() expects (path, mode) string arguments.");
-    return NIL_VAL;
-  }
-
-  ObjString* path = AS_STRING(args[0]);
-  ObjString* mode = AS_STRING(args[1]);
-
-  // Validate mode.
-  const char* m = mode->chars;
-  if (strcmp(m, "r") != 0 && strcmp(m, "w") != 0 && strcmp(m, "a") != 0) {
-    runtimeError("open() mode must be \"r\", \"w\", or \"a\".");
-    return NIL_VAL;
-  }
-
-  FILE* file = fopen(path->chars, m);
-  if (file == NULL) {
-    runtimeError("Could not open file '%s' with mode '%s'.",
-                 path->chars, mode->chars);
-    return NIL_VAL;
-  }
-
-  push(OBJ_VAL(path));  // GC protect
-  push(OBJ_VAL(mode));  // GC protect
-  ObjFile* objFile = newFile(file, path, mode);
-  pop(); // mode
-  pop(); // path
-  return OBJ_VAL(objFile);
-}
+// Builtin functions and methods are in builtins.c.
+// vmCallValue, getCallableArity, callValue, and runtimeError
+// are declared in vm.h for use by builtins.c.
 
 static void resetStack() {
   vm.stackTop = vm.stack;
@@ -1199,7 +31,7 @@ static void resetStack() {
   vm.currentException = NIL_VAL;
 }
 
-static void runtimeError(const char* format, ...) {
+void runtimeError(const char* format, ...) {
   va_list args;
   va_start(args, format);
   vfprintf(stderr, format, args);
@@ -1210,7 +42,7 @@ static void runtimeError(const char* format, ...) {
     CallFrame* frame = &vm.frames[i];
     ObjFunction* function = frame->closure->function;
     size_t instruction = frame->ip - function->chunk.code - 1;
-    fprintf(stderr, "[line %d] in ", 
+    fprintf(stderr, "[line %d] in ",
             function->chunk.lines[instruction]);
     if (function->name == NULL) {
       fprintf(stderr, "script\n");
@@ -1258,57 +90,6 @@ static bool throwException(Value value) {
   return false;
 }
 
-static void defineNative(const char* name, NativeFn function) {
-  push(OBJ_VAL(copyString(name, (int)strlen(name))));
-  push(OBJ_VAL(newNative(function)));
-  tableSet(&vm.globals, AS_STRING(vm.stack[0]), vm.stack[1]);
-  pop();
-  pop();
-}
-
-static void defineNativeMethod(ObjClass* klass, const char* name,
-                               NativeMethodFn function, int arity) {
-  push(OBJ_VAL(copyString(name, (int)strlen(name))));
-  push(OBJ_VAL(newNativeMethod(function, arity)));
-  tableSet(&klass->methods, AS_STRING(vm.stack[0]), vm.stack[1]);
-  pop();
-  pop();
-}
-
-static ObjModule* registerBuiltinModule(const char* name) {
-  ObjString* nameStr = copyString(name, (int)strlen(name));
-  push(OBJ_VAL(nameStr)); // GC protect
-  ObjString* pathStr = copyString("<builtin>", 9);
-  push(OBJ_VAL(pathStr)); // GC protect
-  ObjModule* module = newModule(nameStr, pathStr);
-  push(OBJ_VAL(module)); // GC protect
-  tableSet(&vm.importCache, nameStr, OBJ_VAL(module));
-  pop(); // module
-  pop(); // pathStr
-  pop(); // nameStr
-  return module;
-}
-
-static void defineModuleNative(ObjModule* module, const char* name,
-                               NativeFn function) {
-  push(OBJ_VAL(copyString(name, (int)strlen(name))));
-  push(OBJ_VAL(newNative(function)));
-  tableSet(&module->values, AS_STRING(vm.stack[0]), vm.stack[1]);
-  pop();
-  pop();
-}
-
-static void defineNativeMethodVar(ObjClass* klass, const char* name,
-                                  NativeMethodFn function,
-                                  int minArity, int maxArity) {
-  push(OBJ_VAL(copyString(name, (int)strlen(name))));
-  push(OBJ_VAL(newNativeMethod(function, maxArity)));
-  AS_NATIVE_METHOD(vm.stack[1])->minArity = minArity;
-  tableSet(&klass->methods, AS_STRING(vm.stack[0]), vm.stack[1]);
-  pop();
-  pop();
-}
-
 static ObjString* stringify(Value value) {
   if (IS_STRING(value)) return AS_STRING(value);
 
@@ -1354,6 +135,8 @@ char* readFile(const char* path) {
   size_t fileSize = ftell(file);
   rewind(file);
 
+  // Use malloc (not ALLOCATE) -- temporary buffer freed by the caller,
+  // not a GC-managed object.
   char* buffer = (char*)malloc(fileSize + 1);
   if (buffer == NULL) { fclose(file); return NULL; }
 
@@ -1380,6 +163,8 @@ static char* buildModulePath(const char* baseDir,
                              const char* moduleName, int nameLen) {
   int baseDirLen = baseDir ? (int)strlen(baseDir) : 0;
   int maxLen = baseDirLen + 1 + nameLen + 5 + 1;
+  // Use malloc -- temporary path string freed by resolveModulePath or
+  // OP_IMPORT caller.
   char* path = (char*)malloc(maxLen);
 
   int pos = 0;
@@ -1435,81 +220,12 @@ void initVM() {
 
     vm.initString = NULL;
     vm.initString = copyString("init", 4);
+    vm.lengthString = NULL;
+    vm.lengthString = copyString("length", 6);
+    vm.sizeString = NULL;
+    vm.sizeString = copyString("size", 4);
 
-    vm.arrayMethods = NULL;
-    vm.arrayMethods = newClass(copyString("Array", 5));
-    defineNativeMethod(vm.arrayMethods, "push", arrayPush, 1);
-    defineNativeMethod(vm.arrayMethods, "pop", arrayPop, 0);
-    defineNativeMethod(vm.arrayMethods, "slice", arraySlice, 2);
-    defineNativeMethod(vm.arrayMethods, "map", arrayMap, 1);
-    defineNativeMethod(vm.arrayMethods, "filter", arrayFilter, 1);
-    defineNativeMethodVar(vm.arrayMethods, "reduce", arrayReduce, 1, 2);
-    defineNativeMethod(vm.arrayMethods, "forEach", arrayForEach, 1);
-    defineNativeMethod(vm.arrayMethods, "find", arrayFind, 1);
-    defineNativeMethod(vm.arrayMethods, "findIndex", arrayFindIndex, 1);
-    defineNativeMethod(vm.arrayMethods, "all", arrayAll, 1);
-    defineNativeMethod(vm.arrayMethods, "any", arrayAny, 1);
-
-    vm.mapMethods = NULL;
-    vm.mapMethods = newClass(copyString("Map", 3));
-    defineNativeMethod(vm.mapMethods, "has", mapHas, 1);
-    defineNativeMethod(vm.mapMethods, "keys", mapKeys, 0);
-    defineNativeMethod(vm.mapMethods, "values", mapValues, 0);
-    defineNativeMethod(vm.mapMethods, "remove", mapRemove, 1);
-    defineNativeMethod(vm.mapMethods, "forEach", mapForEach, 1);
-    defineNativeMethod(vm.mapMethods, "map", mapMapMethod, 1);
-    defineNativeMethod(vm.mapMethods, "filter", mapFilter, 1);
-    defineNativeMethodVar(vm.mapMethods, "reduce", mapReduce, 1, 2);
-    defineNativeMethod(vm.mapMethods, "find", mapFind, 1);
-    defineNativeMethod(vm.mapMethods, "any", mapAny, 1);
-    defineNativeMethod(vm.mapMethods, "all", mapAll, 1);
-
-    vm.fileMethods = NULL;
-    vm.fileMethods = newClass(copyString("File", 4));
-    defineNativeMethod(vm.fileMethods, "read", fileRead, 0);
-    defineNativeMethod(vm.fileMethods, "readLine", fileReadLine, 0);
-    defineNativeMethod(vm.fileMethods, "write", fileWrite, 1);
-    defineNativeMethod(vm.fileMethods, "close", fileClose, 0);
-
-    vm.stringMethods = NULL;
-    vm.stringMethods = newClass(copyString("String", 6));
-    defineNativeMethod(vm.stringMethods, "substring", stringSubstring, 2);
-    defineNativeMethod(vm.stringMethods, "indexOf", stringIndexOf, 1);
-    defineNativeMethod(vm.stringMethods, "toUpper", stringToUpper, 0);
-    defineNativeMethod(vm.stringMethods, "toLower", stringToLower, 0);
-    defineNativeMethod(vm.stringMethods, "split", stringSplit, 1);
-    defineNativeMethod(vm.stringMethods, "trim", stringTrim, 0);
-
-    defineNative("type", typeNative);
-
-    // Built-in 'math' module.
-    ObjModule* mathModule = registerBuiltinModule("math");
-    defineModuleNative(mathModule, "sqrt", sqrtNative);
-    defineModuleNative(mathModule, "abs", absNative);
-    defineModuleNative(mathModule, "floor", floorNative);
-    defineModuleNative(mathModule, "ceil", ceilNative);
-    defineModuleNative(mathModule, "round", roundNative);
-    defineModuleNative(mathModule, "min", minNative);
-    defineModuleNative(mathModule, "max", maxNative);
-    defineModuleNative(mathModule, "pow", powNative);
-    defineModuleNative(mathModule, "random", randomNative);
-    defineModuleNative(mathModule, "parseInt", parseIntNative);
-
-    // Built-in 'time' module.
-    ObjModule* timeModule = registerBuiltinModule("time");
-    defineModuleNative(timeModule, "clock", clockNative);
-
-    // Built-in 'io' module.
-    ObjModule* ioModule = registerBuiltinModule("io");
-    defineModuleNative(ioModule, "input", ioInputNative);
-    defineModuleNative(ioModule, "readFile", ioReadFileNative);
-    defineModuleNative(ioModule, "writeFile", ioWriteFileNative);
-    defineModuleNative(ioModule, "appendFile", ioAppendFileNative);
-    defineModuleNative(ioModule, "fileExists", ioFileExistsNative);
-    defineModuleNative(ioModule, "deleteFile", ioDeleteFileNative);
-    defineModuleNative(ioModule, "open", ioOpenNative);
-
-    srand((unsigned int)time(NULL));
+    registerBuiltins();
 }
 
 void freeVM() {
@@ -1517,6 +233,8 @@ void freeVM() {
   freeTable(&vm.strings);
   freeTable(&vm.importCache);
   vm.initString = NULL;
+  vm.lengthString = NULL;
+  vm.sizeString = NULL;
   freeObjects();
 }
 
@@ -1566,7 +284,7 @@ static bool call(ObjClosure* closure, int argCount) {
   return true;
 }
 
-static bool callValue(Value callee, int argCount) {
+bool callValue(Value callee, int argCount) {
   if (IS_OBJ(callee)) {
     switch (OBJ_TYPE(callee)) {
       case OBJ_BOUND_METHOD: {
@@ -1605,6 +323,30 @@ static bool callValue(Value callee, int argCount) {
   }
   runtimeError("Can only call functions and classes.");
   return false;
+}
+
+bool vmCallValue(Value callee, int argCount, Value* result) {
+  int framesBefore = vm.frameCount;
+  if (!callValue(callee, argCount)) return false;
+  if (vm.frameCount > framesBefore) {
+    InterpretResult r = run(framesBefore);
+    if (r != INTERPRET_OK) return false;
+  }
+  *result = pop();
+  return true;
+}
+
+int getCallableArity(Value callee) {
+  if (IS_OBJ(callee)) {
+    switch (OBJ_TYPE(callee)) {
+      case OBJ_CLOSURE:
+        return AS_CLOSURE(callee)->function->arity;
+      case OBJ_BOUND_METHOD:
+        return AS_BOUND_METHOD(callee)->method->function->arity;
+      default: break;
+    }
+  }
+  return -1;
 }
 
 static bool invokeFromClass(ObjClass* klass, ObjString* name, int argCount) {
@@ -1763,6 +505,263 @@ static void concatenate() {
   push(OBJ_VAL(result));
 }
 
+static bool executeGetProperty(ObjString* name) {
+  if (IS_MODULE(peek(0))) {
+    ObjModule* module = AS_MODULE(peek(0));
+    Value value;
+    if (tableGet(&module->values, name, &value)) {
+      pop();
+      push(value);
+      return true;
+    }
+    runtimeError("Module '%s' has no member '%s'.",
+                 module->name->chars, name->chars);
+    return false;
+  }
+
+  if (IS_STRING(peek(0))) {
+    ObjString* string = AS_STRING(peek(0));
+
+    if (name == vm.lengthString) {
+      pop();
+      push(NUMBER_VAL(string->length));
+      return true;
+    }
+
+    runtimeError("String has no property '%s'.", name->chars);
+    return false;
+  }
+
+  if (IS_ARRAY(peek(0))) {
+    ObjArray* array = AS_ARRAY(peek(0));
+
+    if (name == vm.lengthString) {
+      pop();
+      push(NUMBER_VAL(array->elements.count));
+      return true;
+    }
+
+    runtimeError("Array has no property '%s'.", name->chars);
+    return false;
+  }
+
+  if (IS_MAP(peek(0))) {
+    ObjMap* map = AS_MAP(peek(0));
+
+    if (name == vm.sizeString) {
+      pop();
+      push(NUMBER_VAL(map->entries.liveCount));
+      return true;
+    }
+
+    runtimeError("Map has no property '%s'.", name->chars);
+    return false;
+  }
+
+  if (!IS_INSTANCE(peek(0))) {
+    runtimeError("Only instances have properties.");
+    return false;
+  }
+
+  ObjInstance* instance = AS_INSTANCE(peek(0));
+
+  Value value;
+  if (tableGet(&instance->fields, name, &value)) {
+    pop(); // Instance.
+    push(value);
+    return true;
+  }
+
+  if (!bindMethod(instance->klass, name)) {
+    return false;
+  }
+  return true;
+}
+
+static bool executeIndexGet(void) {
+  Value index = pop();
+  Value receiver = pop();
+
+  if (IS_ARRAY(receiver)) {
+    if (!IS_NUMBER(index)) {
+      runtimeError("Array index must be a number.");
+      return false;
+    }
+
+    ObjArray* array = AS_ARRAY(receiver);
+    int i = (int)AS_NUMBER(index);
+
+    if (i < 0 || i >= array->elements.count) {
+      runtimeError("Array index %d out of bounds [0, %d).",
+                   i, array->elements.count);
+      return false;
+    }
+
+    push(array->elements.values[i]);
+  } else if (IS_MAP(receiver)) {
+    ObjMap* map = AS_MAP(receiver);
+    Value value;
+
+    if (!valueTableGet(&map->entries, index, &value)) {
+      runtimeError("Key not found in map.");
+      return false;
+    }
+
+    push(value);
+  } else {
+    runtimeError("Only arrays and maps support indexing.");
+    return false;
+  }
+  return true;
+}
+
+static bool executeIndexSet(void) {
+  Value value = pop();
+  Value index = pop();
+  Value receiver = pop();
+
+  if (IS_ARRAY(receiver)) {
+    if (!IS_NUMBER(index)) {
+      runtimeError("Array index must be a number.");
+      return false;
+    }
+
+    ObjArray* array = AS_ARRAY(receiver);
+    int i = (int)AS_NUMBER(index);
+
+    if (i < 0 || i >= array->elements.count) {
+      runtimeError("Array index %d out of bounds [0, %d).",
+                   i, array->elements.count);
+      return false;
+    }
+
+    array->elements.values[i] = value;
+  } else if (IS_MAP(receiver)) {
+    ObjMap* map = AS_MAP(receiver);
+    valueTableSet(&map->entries, index, value);
+  } else {
+    runtimeError("Only arrays and maps support index assignment.");
+    return false;
+  }
+
+  push(value);
+  return true;
+}
+
+static InterpretResult executeImport(ObjString* moduleName,
+                                     CallFrame** framePtr,
+                                     int baseFrame) {
+  // Check for built-in module by name.
+  Value builtinCached;
+  if (tableGet(&vm.importCache, moduleName, &builtinCached) &&
+      IS_MODULE(builtinCached)) {
+    push(builtinCached);
+    return INTERPRET_OK;
+  }
+
+  // Resolve path by searching all search paths.
+  char* resolvedPath = resolveModulePath(
+      moduleName->chars, moduleName->length);
+  if (resolvedPath == NULL) {
+    runtimeError("Could not find module '%s'.",
+                 moduleName->chars);
+    return INTERPRET_RUNTIME_ERROR;
+  }
+
+  ObjString* pathStr = copyString(resolvedPath,
+                                  (int)strlen(resolvedPath));
+  push(OBJ_VAL(pathStr)); // GC protect
+
+  // Check cache.
+  Value cached;
+  if (tableGet(&vm.importCache, pathStr, &cached)) {
+    pop(); // pathStr
+    free(resolvedPath);
+    if (IS_BOOL(cached)) {
+      runtimeError("Circular import detected: '%s'.",
+                   moduleName->chars);
+      return INTERPRET_RUNTIME_ERROR;
+    }
+    push(cached); // push cached ObjModule
+    return INTERPRET_OK;
+  }
+
+  // Mark as loading (sentinel for circular import detection).
+  tableSet(&vm.importCache, pathStr, BOOL_VAL(true));
+
+  // Read source file.
+  char* source = readFile(resolvedPath);
+  if (source == NULL) {
+    pop(); // pathStr
+    free(resolvedPath);
+    runtimeError("Could not load module '%s'.",
+                 moduleName->chars);
+    return INTERPRET_RUNTIME_ERROR;
+  }
+
+  // Extract base name from dotted module name.
+  const char* baseName = moduleName->chars;
+  int baseLen = moduleName->length;
+  for (int i = moduleName->length - 1; i >= 0; i--) {
+    if (moduleName->chars[i] == '.') {
+      baseName = moduleName->chars + i + 1;
+      baseLen = moduleName->length - i - 1;
+      break;
+    }
+  }
+
+  // Create module object.
+  ObjString* nameStr = copyString(baseName, baseLen);
+  ObjModule* module = newModule(nameStr, pathStr);
+  push(OBJ_VAL(module)); // GC protect
+
+  // Copy native functions into module globals.
+  copyNatives(&module->values);
+
+  // Compile module source.
+  ObjFunction* modFunc = compile(source);
+  free(source);
+  if (modFunc == NULL) {
+    pop(); // module
+    pop(); // pathStr
+    free(resolvedPath);
+    runtimeError("Compilation error in module '%s'.",
+                 moduleName->chars);
+    return INTERPRET_RUNTIME_ERROR;
+  }
+
+  // Create closure with module's own globals.
+  ObjClosure* modClosure = newClosure(modFunc);
+  modClosure->globals = &module->values;
+  modClosure->globalsOwner = (Obj*)module;
+  free(resolvedPath);
+
+  // Execute module.
+  push(OBJ_VAL(modClosure));
+  call(modClosure, 0);
+  int savedFrameCount = vm.frameCount - 1;
+
+  InterpretResult modResult = run(savedFrameCount);
+
+  if (modResult != INTERPRET_OK) {
+    return modResult;
+  }
+
+  pop(); // Discard module's return value.
+
+  // Refresh frame pointer after recursive run().
+  *framePtr = &vm.frames[vm.frameCount - 1];
+
+  // Cache the module (replace sentinel).
+  tableSet(&vm.importCache, pathStr, OBJ_VAL(module));
+
+  // Clean up stack: pop module, pop pathStr, push module.
+  pop(); // module (GC protect)
+  pop(); // pathStr (GC protect)
+  push(OBJ_VAL(module));
+  return INTERPRET_OK;
+}
+
 static InterpretResult run(int baseFrame) {
   CallFrame* frame = &vm.frames[vm.frameCount - 1];
 
@@ -1859,83 +858,8 @@ static InterpretResult run(int baseFrame) {
         break;
       }
       case OP_GET_PROPERTY: {
-        if (IS_MODULE(peek(0))) {
-          ObjModule* module = AS_MODULE(peek(0));
-          ObjString* name = READ_STRING();
-          Value value;
-          if (tableGet(&module->values, name, &value)) {
-            pop();
-            push(value);
-            break;
-          }
-          runtimeError("Module '%s' has no member '%s'.",
-                       module->name->chars, name->chars);
-          return INTERPRET_RUNTIME_ERROR;
-        }
-
-        if (IS_STRING(peek(0))) {
-          ObjString* string = AS_STRING(peek(0));
-          ObjString* name = READ_STRING();
-
-          if (name->length == 6 &&
-              memcmp(name->chars, "length", 6) == 0) {
-            pop();
-            push(NUMBER_VAL(string->length));
-            break;
-          }
-
-          runtimeError("String has no property '%s'.", name->chars);
-          return INTERPRET_RUNTIME_ERROR;
-        }
-
-        if (IS_ARRAY(peek(0))) {
-          ObjArray* array = AS_ARRAY(peek(0));
-          ObjString* name = READ_STRING();
-
-          if (name->length == 6 &&
-              memcmp(name->chars, "length", 6) == 0) {
-            pop();
-            push(NUMBER_VAL(array->elements.count));
-            break;
-          }
-
-          runtimeError("Array has no property '%s'.", name->chars);
-          return INTERPRET_RUNTIME_ERROR;
-        }
-
-        if (IS_MAP(peek(0))) {
-          ObjMap* map = AS_MAP(peek(0));
-          ObjString* name = READ_STRING();
-
-          if (name->length == 4 &&
-              memcmp(name->chars, "size", 4) == 0) {
-            pop();
-            push(NUMBER_VAL(map->entries.liveCount));
-            break;
-          }
-
-          runtimeError("Map has no property '%s'.", name->chars);
-          return INTERPRET_RUNTIME_ERROR;
-        }
-
-        if (!IS_INSTANCE(peek(0))) {
-          runtimeError("Only instances have properties.");
-          return INTERPRET_RUNTIME_ERROR;
-        }
-
-        ObjInstance* instance = AS_INSTANCE(peek(0));
         ObjString* name = READ_STRING();
-
-        Value value;
-        if (tableGet(&instance->fields, name, &value)) {
-          pop(); // Instance.
-          push(value);
-          break;
-        }
-
-        if (!bindMethod(instance->klass, name)) {
-          return INTERPRET_RUNTIME_ERROR;
-        }
+        if (!executeGetProperty(name)) return INTERPRET_RUNTIME_ERROR;
         break;
       }
       case OP_SET_PROPERTY: {
@@ -2085,71 +1009,11 @@ static InterpretResult run(int baseFrame) {
         break;
       }
       case OP_INDEX_GET: {
-        Value index = pop();
-        Value receiver = pop();
-
-        if (IS_ARRAY(receiver)) {
-          if (!IS_NUMBER(index)) {
-            runtimeError("Array index must be a number.");
-            return INTERPRET_RUNTIME_ERROR;
-          }
-
-          ObjArray* array = AS_ARRAY(receiver);
-          int i = (int)AS_NUMBER(index);
-
-          if (i < 0 || i >= array->elements.count) {
-            runtimeError("Array index %d out of bounds [0, %d).",
-                         i, array->elements.count);
-            return INTERPRET_RUNTIME_ERROR;
-          }
-
-          push(array->elements.values[i]);
-        } else if (IS_MAP(receiver)) {
-          ObjMap* map = AS_MAP(receiver);
-          Value value;
-
-          if (!valueTableGet(&map->entries, index, &value)) {
-            runtimeError("Key not found in map.");
-            return INTERPRET_RUNTIME_ERROR;
-          }
-
-          push(value);
-        } else {
-          runtimeError("Only arrays and maps support indexing.");
-          return INTERPRET_RUNTIME_ERROR;
-        }
+        if (!executeIndexGet()) return INTERPRET_RUNTIME_ERROR;
         break;
       }
       case OP_INDEX_SET: {
-        Value value = pop();
-        Value index = pop();
-        Value receiver = pop();
-
-        if (IS_ARRAY(receiver)) {
-          if (!IS_NUMBER(index)) {
-            runtimeError("Array index must be a number.");
-            return INTERPRET_RUNTIME_ERROR;
-          }
-
-          ObjArray* array = AS_ARRAY(receiver);
-          int i = (int)AS_NUMBER(index);
-
-          if (i < 0 || i >= array->elements.count) {
-            runtimeError("Array index %d out of bounds [0, %d).",
-                         i, array->elements.count);
-            return INTERPRET_RUNTIME_ERROR;
-          }
-
-          array->elements.values[i] = value;
-        } else if (IS_MAP(receiver)) {
-          ObjMap* map = AS_MAP(receiver);
-          valueTableSet(&map->entries, index, value);
-        } else {
-          runtimeError("Only arrays and maps support index assignment.");
-          return INTERPRET_RUNTIME_ERROR;
-        }
-
-        push(value);
+        if (!executeIndexSet()) return INTERPRET_RUNTIME_ERROR;
         break;
       }
       case OP_CLOSURE: {
@@ -2223,115 +1087,8 @@ static InterpretResult run(int baseFrame) {
         break;
       case OP_IMPORT: {
         ObjString* moduleName = READ_STRING();
-
-        // Check for built-in module by name.
-        Value builtinCached;
-        if (tableGet(&vm.importCache, moduleName, &builtinCached) &&
-            IS_MODULE(builtinCached)) {
-          push(builtinCached);
-          break;
-        }
-
-        // Resolve path by searching all search paths.
-        char* resolvedPath = resolveModulePath(
-            moduleName->chars, moduleName->length);
-        if (resolvedPath == NULL) {
-          runtimeError("Could not find module '%s'.",
-                       moduleName->chars);
-          return INTERPRET_RUNTIME_ERROR;
-        }
-
-        ObjString* pathStr = copyString(resolvedPath,
-                                        (int)strlen(resolvedPath));
-        push(OBJ_VAL(pathStr)); // GC protect
-
-        // Check cache.
-        Value cached;
-        if (tableGet(&vm.importCache, pathStr, &cached)) {
-          pop(); // pathStr
-          free(resolvedPath);
-          if (IS_BOOL(cached)) {
-            runtimeError("Circular import detected: '%s'.",
-                         moduleName->chars);
-            return INTERPRET_RUNTIME_ERROR;
-          }
-          push(cached); // push cached ObjModule
-          break;
-        }
-
-        // Mark as loading (sentinel for circular import detection).
-        tableSet(&vm.importCache, pathStr, BOOL_VAL(true));
-
-        // Read source file.
-        char* source = readFile(resolvedPath);
-        if (source == NULL) {
-          pop(); // pathStr
-          free(resolvedPath);
-          runtimeError("Could not load module '%s'.",
-                       moduleName->chars);
-          return INTERPRET_RUNTIME_ERROR;
-        }
-
-        // Extract base name from dotted module name.
-        const char* baseName = moduleName->chars;
-        int baseLen = moduleName->length;
-        for (int i = moduleName->length - 1; i >= 0; i--) {
-          if (moduleName->chars[i] == '.') {
-            baseName = moduleName->chars + i + 1;
-            baseLen = moduleName->length - i - 1;
-            break;
-          }
-        }
-
-        // Create module object.
-        ObjString* nameStr = copyString(baseName, baseLen);
-        ObjModule* module = newModule(nameStr, pathStr);
-        push(OBJ_VAL(module)); // GC protect
-
-        // Copy native functions into module globals.
-        copyNatives(&module->values);
-
-        // Compile module source.
-        ObjFunction* modFunc = compile(source);
-        free(source);
-        if (modFunc == NULL) {
-          pop(); // module
-          pop(); // pathStr
-          free(resolvedPath);
-          runtimeError("Compilation error in module '%s'.",
-                       moduleName->chars);
-          return INTERPRET_RUNTIME_ERROR;
-        }
-
-        // Create closure with module's own globals.
-        ObjClosure* modClosure = newClosure(modFunc);
-        modClosure->globals = &module->values;
-        modClosure->globalsOwner = (Obj*)module;
-        free(resolvedPath);
-
-        // Execute module.
-        push(OBJ_VAL(modClosure));
-        call(modClosure, 0);
-        int savedFrameCount = vm.frameCount - 1;
-
-        InterpretResult modResult = run(savedFrameCount);
-
-        if (modResult != INTERPRET_OK) {
-          return modResult;
-        }
-
-        pop(); // Discard module's return value.
-
-        // Refresh frame pointer after recursive run().
-        frame = &vm.frames[vm.frameCount - 1];
-
-        // Cache the module (replace sentinel).
-        tableSet(&vm.importCache, pathStr, OBJ_VAL(module));
-
-        // Clean up stack: pop module, pop pathStr, push module.
-        pop(); // module (GC protect)
-        pop(); // pathStr (GC protect)
-        push(OBJ_VAL(module));
+        InterpretResult r = executeImport(moduleName, &frame, baseFrame);
+        if (r != INTERPRET_OK) return r;
         break;
       }
       case OP_TRY: {

@@ -1,0 +1,15 @@
+// Test deep recursion up to the FRAMES_MAX (64) limit.
+
+// A chain of 60 nested calls should succeed.
+fun countdown(n) {
+  if (n <= 0) return "done";
+  return countdown(n - 1);
+}
+print countdown(60); // expect: done
+
+// 65 levels should overflow the 64-frame stack.
+fun overflow(n) {
+  if (n <= 0) return 0;
+  return overflow(n - 1);
+}
+overflow(65); // expect runtime error: Stack overflow.

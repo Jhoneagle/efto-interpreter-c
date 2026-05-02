@@ -15,4 +15,6 @@
 
 #define UINT8_COUNT (UINT8_MAX + 1)
 
+#define TABLE_MAX_LOAD 0.75
+
 #endif

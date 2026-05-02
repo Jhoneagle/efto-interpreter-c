@@ -1,0 +1,13 @@
+// Test many closures to exercise GC.
+
+var closures = [];
+for (var i = 0; i < 200; i = i + 1) {
+  var value = i;
+  closures.push(() => value);
+}
+
+// Verify first and last closures still work after heavy allocation.
+print closures[0]();   // expect: 0
+print closures[99]();  // expect: 99
+print closures[199](); // expect: 199
+print closures.length; // expect: 200

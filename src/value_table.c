@@ -5,7 +5,12 @@
 #include "object.h"
 #include "value_table.h"
 
-#define TABLE_MAX_LOAD 0.75
+/*
+ * NOTE: This file has a parallel implementation in table.c.
+ * Both use the same linear-probing hash table algorithm with tombstones.
+ * Bug fixes to findEntry, adjustCapacity, or the probe sequence should be
+ * checked in both files.
+ */
 
 void initValueTable(ValueTable* table) {
   table->count = 0;
@@ -61,6 +66,7 @@ uint32_t hashValue(Value value) {
 #endif
 }
 
+// Parallel: table.c:findEntry
 static ValueEntry* findEntry(ValueEntry* entries, int capacity,
                              Value key) {
   uint32_t index = hashValue(key) & (capacity - 1);
@@ -94,6 +100,7 @@ bool valueTableGet(ValueTable* table, Value key, Value* value) {
   return true;
 }
 
+// Parallel: table.c:adjustCapacity
 static void adjustCapacity(ValueTable* table, int capacity) {
   ValueEntry* entries = ALLOCATE(ValueEntry, capacity);
   for (int i = 0; i < capacity; i++) {
