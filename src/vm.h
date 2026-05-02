@@ -17,10 +17,24 @@ typedef struct {
   int argCount;
 } CallFrame;
 
+typedef enum {
+  HANDLER_CATCH,
+  HANDLER_FINALLY,
+} HandlerType;
+
+typedef enum {
+  COMPLETE_NORMAL = 0,
+  COMPLETE_EXCEPTION = 1,
+  COMPLETE_RETURN = 2,
+  COMPLETE_BREAK = 3,
+  COMPLETE_CONTINUE = 4,
+} CompletionType;
+
 typedef struct {
+  HandlerType type;
   int frameCount;
   Value* stackTop;
-  uint8_t* catchIp;
+  uint8_t* handlerIp;
   CallFrame* frame;
 } ExceptionHandler;
 

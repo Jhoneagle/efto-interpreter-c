@@ -183,6 +183,14 @@ int disassembleInstruction(Chunk* chunk, int offset) {
              offset + 4 + jump);
       return offset + 4;
     }
+    case OP_SETUP_FINALLY:
+      return jumpInstruction("OP_SETUP_FINALLY", 1, chunk, offset);
+    case OP_ENTER_FINALLY:
+      return byteInstruction("OP_ENTER_FINALLY", chunk, offset);
+    case OP_END_FINALLY:
+      return simpleInstruction("OP_END_FINALLY", offset);
+    case OP_NOP:
+      return simpleInstruction("OP_NOP", offset);
     default:
       printf("Unknown opcode %d\n", instruction);
       return offset + 1;

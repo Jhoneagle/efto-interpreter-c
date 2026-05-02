@@ -19,6 +19,8 @@ VM vm;
 static void runtimeError(const char* format, ...);
 static void closeUpvalues(Value* last);
 static ObjString* stringify(Value value);
+static bool callValue(Value callee, int argCount);
+static InterpretResult run(int baseFrame);
 
 static Value clockNative(int argCount, Value* args) {
   return NUMBER_VAL((double)clock() / CLOCKS_PER_SEC);
@@ -227,6 +229,344 @@ static bool stringTrim(Value receiver, int argCount, Value* args,
   return true;
 }
 
+// --- VM callback helpers ---
+
+static bool vmCallValue(Value callee, int argCount, Value* result) {
+  int framesBefore = vm.frameCount;
+  if (!callValue(callee, argCount)) return false;
+  if (vm.frameCount > framesBefore) {
+    InterpretResult r = run(framesBefore);
+    if (r != INTERPRET_OK) return false;
+  }
+  *result = pop();
+  return true;
+}
+
+static int getCallableArity(Value callee) {
+  if (IS_OBJ(callee)) {
+    switch (OBJ_TYPE(callee)) {
+      case OBJ_CLOSURE:
+        return AS_CLOSURE(callee)->function->arity;
+      case OBJ_BOUND_METHOD:
+        return AS_BOUND_METHOD(callee)->method->function->arity;
+      default: break;
+    }
+  }
+  return -1;
+}
+
+// --- Higher-order array methods ---
+
+static bool arrayMap(Value receiver, int argCount, Value* args,
+                     Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  Value callback = args[0];
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 2) ? 2 : 1;
+
+  int length = array->elements.count;
+  ObjArray* resultArray = newArray();
+
+  push(receiver);
+  push(callback);
+  push(OBJ_VAL(resultArray));
+
+  for (int i = 0; i < length; i++) {
+    ObjArray* src = AS_ARRAY(vm.stackTop[-3]);
+    Value cb = vm.stackTop[-2];
+
+    push(cb);
+    push(src->elements.values[i]);
+    if (passArgs >= 2) push(NUMBER_VAL(i));
+
+    Value mapped;
+    if (!vmCallValue(cb, passArgs, &mapped)) {
+      vm.stackTop -= 3;
+      return false;
+    }
+
+    ObjArray* dst = AS_ARRAY(vm.stackTop[-1]);
+    writeValueArray(&dst->elements, mapped);
+  }
+
+  *result = vm.stackTop[-1];
+  vm.stackTop -= 3;
+  return true;
+}
+
+static bool arrayFilter(Value receiver, int argCount, Value* args,
+                        Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  Value callback = args[0];
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 2) ? 2 : 1;
+
+  int length = array->elements.count;
+  ObjArray* resultArray = newArray();
+
+  push(receiver);
+  push(callback);
+  push(OBJ_VAL(resultArray));
+
+  for (int i = 0; i < length; i++) {
+    ObjArray* src = AS_ARRAY(vm.stackTop[-3]);
+    Value cb = vm.stackTop[-2];
+    Value element = src->elements.values[i];
+
+    push(cb);
+    push(element);
+    if (passArgs >= 2) push(NUMBER_VAL(i));
+
+    Value test;
+    if (!vmCallValue(cb, passArgs, &test)) {
+      vm.stackTop -= 3;
+      return false;
+    }
+
+    if (!IS_NIL(test) && !(IS_BOOL(test) && !AS_BOOL(test))) {
+      ObjArray* dst = AS_ARRAY(vm.stackTop[-1]);
+      src = AS_ARRAY(vm.stackTop[-3]);
+      writeValueArray(&dst->elements, src->elements.values[i]);
+    }
+  }
+
+  *result = vm.stackTop[-1];
+  vm.stackTop -= 3;
+  return true;
+}
+
+static bool arrayReduce(Value receiver, int argCount, Value* args,
+                        Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  Value callback = args[0];
+  int startIndex;
+  Value accumulator;
+
+  if (argCount == 2) {
+    accumulator = args[1];
+    startIndex = 0;
+  } else {
+    if (array->elements.count == 0) {
+      runtimeError("reduce() of empty array with no initial value.");
+      return false;
+    }
+    accumulator = array->elements.values[0];
+    startIndex = 1;
+  }
+
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 3) ? 3 : 2;
+  int length = array->elements.count;
+
+  push(receiver);
+  push(callback);
+  push(accumulator);
+
+  for (int i = startIndex; i < length; i++) {
+    ObjArray* src = AS_ARRAY(vm.stackTop[-3]);
+    Value cb = vm.stackTop[-2];
+    Value acc = vm.stackTop[-1];
+
+    push(cb);
+    push(acc);
+    push(src->elements.values[i]);
+    if (passArgs >= 3) push(NUMBER_VAL(i));
+
+    Value reduced;
+    if (!vmCallValue(cb, passArgs, &reduced)) {
+      vm.stackTop -= 3;
+      return false;
+    }
+
+    vm.stackTop[-1] = reduced;
+  }
+
+  *result = vm.stackTop[-1];
+  vm.stackTop -= 3;
+  return true;
+}
+
+static bool arrayForEach(Value receiver, int argCount, Value* args,
+                         Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  Value callback = args[0];
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 2) ? 2 : 1;
+  int length = array->elements.count;
+
+  push(receiver);
+  push(callback);
+
+  for (int i = 0; i < length; i++) {
+    ObjArray* src = AS_ARRAY(vm.stackTop[-2]);
+    Value cb = vm.stackTop[-1];
+
+    push(cb);
+    push(src->elements.values[i]);
+    if (passArgs >= 2) push(NUMBER_VAL(i));
+
+    Value dummy;
+    if (!vmCallValue(cb, passArgs, &dummy)) {
+      vm.stackTop -= 2;
+      return false;
+    }
+  }
+
+  vm.stackTop -= 2;
+  *result = NIL_VAL;
+  return true;
+}
+
+static bool arrayFind(Value receiver, int argCount, Value* args,
+                      Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  Value callback = args[0];
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 2) ? 2 : 1;
+  int length = array->elements.count;
+
+  push(receiver);
+  push(callback);
+
+  for (int i = 0; i < length; i++) {
+    ObjArray* src = AS_ARRAY(vm.stackTop[-2]);
+    Value cb = vm.stackTop[-1];
+    Value element = src->elements.values[i];
+
+    push(cb);
+    push(element);
+    if (passArgs >= 2) push(NUMBER_VAL(i));
+
+    Value test;
+    if (!vmCallValue(cb, passArgs, &test)) {
+      vm.stackTop -= 2;
+      return false;
+    }
+
+    if (!IS_NIL(test) && !(IS_BOOL(test) && !AS_BOOL(test))) {
+      src = AS_ARRAY(vm.stackTop[-2]);
+      *result = src->elements.values[i];
+      vm.stackTop -= 2;
+      return true;
+    }
+  }
+
+  vm.stackTop -= 2;
+  *result = NIL_VAL;
+  return true;
+}
+
+static bool arrayFindIndex(Value receiver, int argCount, Value* args,
+                           Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  Value callback = args[0];
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 2) ? 2 : 1;
+  int length = array->elements.count;
+
+  push(receiver);
+  push(callback);
+
+  for (int i = 0; i < length; i++) {
+    ObjArray* src = AS_ARRAY(vm.stackTop[-2]);
+    Value cb = vm.stackTop[-1];
+
+    push(cb);
+    push(src->elements.values[i]);
+    if (passArgs >= 2) push(NUMBER_VAL(i));
+
+    Value test;
+    if (!vmCallValue(cb, passArgs, &test)) {
+      vm.stackTop -= 2;
+      return false;
+    }
+
+    if (!IS_NIL(test) && !(IS_BOOL(test) && !AS_BOOL(test))) {
+      vm.stackTop -= 2;
+      *result = NUMBER_VAL(i);
+      return true;
+    }
+  }
+
+  vm.stackTop -= 2;
+  *result = NUMBER_VAL(-1);
+  return true;
+}
+
+static bool arrayAll(Value receiver, int argCount, Value* args,
+                     Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  Value callback = args[0];
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 2) ? 2 : 1;
+  int length = array->elements.count;
+
+  push(receiver);
+  push(callback);
+
+  for (int i = 0; i < length; i++) {
+    ObjArray* src = AS_ARRAY(vm.stackTop[-2]);
+    Value cb = vm.stackTop[-1];
+
+    push(cb);
+    push(src->elements.values[i]);
+    if (passArgs >= 2) push(NUMBER_VAL(i));
+
+    Value test;
+    if (!vmCallValue(cb, passArgs, &test)) {
+      vm.stackTop -= 2;
+      return false;
+    }
+
+    if (IS_NIL(test) || (IS_BOOL(test) && !AS_BOOL(test))) {
+      vm.stackTop -= 2;
+      *result = BOOL_VAL(false);
+      return true;
+    }
+  }
+
+  vm.stackTop -= 2;
+  *result = BOOL_VAL(true);
+  return true;
+}
+
+static bool arrayAny(Value receiver, int argCount, Value* args,
+                     Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  Value callback = args[0];
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 2) ? 2 : 1;
+  int length = array->elements.count;
+
+  push(receiver);
+  push(callback);
+
+  for (int i = 0; i < length; i++) {
+    ObjArray* src = AS_ARRAY(vm.stackTop[-2]);
+    Value cb = vm.stackTop[-1];
+
+    push(cb);
+    push(src->elements.values[i]);
+    if (passArgs >= 2) push(NUMBER_VAL(i));
+
+    Value test;
+    if (!vmCallValue(cb, passArgs, &test)) {
+      vm.stackTop -= 2;
+      return false;
+    }
+
+    if (!IS_NIL(test) && !(IS_BOOL(test) && !AS_BOOL(test))) {
+      vm.stackTop -= 2;
+      *result = BOOL_VAL(true);
+      return true;
+    }
+  }
+
+  vm.stackTop -= 2;
+  *result = BOOL_VAL(false);
+  return true;
+}
+
 // --- Native functions ---
 
 static Value typeNative(int argCount, Value* args) {
@@ -254,6 +594,87 @@ static Value typeNative(int argCount, Value* args) {
     }
   }
   return OBJ_VAL(copyString("unknown", 7));
+}
+
+static Value sqrtNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("sqrt() expects a number argument.");
+    return NIL_VAL;
+  }
+  return NUMBER_VAL(sqrt(AS_NUMBER(args[0])));
+}
+
+static Value absNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("abs() expects a number argument.");
+    return NIL_VAL;
+  }
+  return NUMBER_VAL(fabs(AS_NUMBER(args[0])));
+}
+
+static Value floorNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("floor() expects a number argument.");
+    return NIL_VAL;
+  }
+  return NUMBER_VAL(floor(AS_NUMBER(args[0])));
+}
+
+static Value ceilNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("ceil() expects a number argument.");
+    return NIL_VAL;
+  }
+  return NUMBER_VAL(ceil(AS_NUMBER(args[0])));
+}
+
+static Value roundNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("round() expects a number argument.");
+    return NIL_VAL;
+  }
+  return NUMBER_VAL(round(AS_NUMBER(args[0])));
+}
+
+static Value minNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+    runtimeError("min() expects two number arguments.");
+    return NIL_VAL;
+  }
+  double a = AS_NUMBER(args[0]), b = AS_NUMBER(args[1]);
+  return NUMBER_VAL(a < b ? a : b);
+}
+
+static Value maxNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+    runtimeError("max() expects two number arguments.");
+    return NIL_VAL;
+  }
+  double a = AS_NUMBER(args[0]), b = AS_NUMBER(args[1]);
+  return NUMBER_VAL(a > b ? a : b);
+}
+
+static Value powNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+    runtimeError("pow() expects two number arguments.");
+    return NIL_VAL;
+  }
+  return NUMBER_VAL(pow(AS_NUMBER(args[0]), AS_NUMBER(args[1])));
+}
+
+static Value randomNative(int argCount, Value* args) {
+  return NUMBER_VAL((double)rand() / RAND_MAX);
+}
+
+static Value parseIntNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("parseInt() expects a string argument.");
+    return NIL_VAL;
+  }
+  char* end;
+  double result = strtod(AS_STRING(args[0])->chars, &end);
+  if (end == AS_STRING(args[0])->chars) return NIL_VAL;
+  return NUMBER_VAL(result);
 }
 
 static void resetStack() {
@@ -295,18 +716,21 @@ static bool throwException(Value value) {
         &vm.exceptionHandlers[vm.exceptionHandlerCount - 1];
     vm.exceptionHandlerCount--;
 
-    // Restore VM state to when the try block was entered.
+    // Restore VM state.
     vm.stackTop = handler->stackTop;
     vm.frameCount = handler->frameCount;
-
-    // Close any open upvalues above the restored stack top.
     closeUpvalues(vm.stackTop);
 
-    // Push the exception value for the catch block.
-    push(value);
+    if (handler->type == HANDLER_CATCH) {
+      // Push exception value for catch block.
+      push(value);
+    } else {
+      // HANDLER_FINALLY: push completion state (exception tag + value).
+      push(NUMBER_VAL(COMPLETE_EXCEPTION));
+      push(value);
+    }
 
-    // Jump to the catch block.
-    handler->frame->ip = handler->catchIp;
+    handler->frame->ip = handler->handlerIp;
     return true;
   }
 
@@ -332,6 +756,17 @@ static void defineNativeMethod(ObjClass* klass, const char* name,
                                NativeMethodFn function, int arity) {
   push(OBJ_VAL(copyString(name, (int)strlen(name))));
   push(OBJ_VAL(newNativeMethod(function, arity)));
+  tableSet(&klass->methods, AS_STRING(vm.stack[0]), vm.stack[1]);
+  pop();
+  pop();
+}
+
+static void defineNativeMethodVar(ObjClass* klass, const char* name,
+                                  NativeMethodFn function,
+                                  int minArity, int maxArity) {
+  push(OBJ_VAL(copyString(name, (int)strlen(name))));
+  push(OBJ_VAL(newNativeMethod(function, maxArity)));
+  AS_NATIVE_METHOD(vm.stack[1])->minArity = minArity;
   tableSet(&klass->methods, AS_STRING(vm.stack[0]), vm.stack[1]);
   pop();
   pop();
@@ -467,6 +902,14 @@ void initVM() {
     defineNativeMethod(vm.arrayMethods, "push", arrayPush, 1);
     defineNativeMethod(vm.arrayMethods, "pop", arrayPop, 0);
     defineNativeMethod(vm.arrayMethods, "slice", arraySlice, 2);
+    defineNativeMethod(vm.arrayMethods, "map", arrayMap, 1);
+    defineNativeMethod(vm.arrayMethods, "filter", arrayFilter, 1);
+    defineNativeMethodVar(vm.arrayMethods, "reduce", arrayReduce, 1, 2);
+    defineNativeMethod(vm.arrayMethods, "forEach", arrayForEach, 1);
+    defineNativeMethod(vm.arrayMethods, "find", arrayFind, 1);
+    defineNativeMethod(vm.arrayMethods, "findIndex", arrayFindIndex, 1);
+    defineNativeMethod(vm.arrayMethods, "all", arrayAll, 1);
+    defineNativeMethod(vm.arrayMethods, "any", arrayAny, 1);
 
     vm.mapMethods = NULL;
     vm.mapMethods = newClass(copyString("Map", 3));
@@ -486,6 +929,18 @@ void initVM() {
 
     defineNative("clock", clockNative);
     defineNative("type", typeNative);
+    defineNative("sqrt", sqrtNative);
+    defineNative("abs", absNative);
+    defineNative("floor", floorNative);
+    defineNative("ceil", ceilNative);
+    defineNative("round", roundNative);
+    defineNative("min", minNative);
+    defineNative("max", maxNative);
+    defineNative("pow", powNative);
+    defineNative("random", randomNative);
+    defineNative("parseInt", parseIntNative);
+
+    srand((unsigned int)time(NULL));
 }
 
 void freeVM() {
@@ -592,9 +1047,14 @@ static bool invokeFromClass(ObjClass* klass, ObjString* name, int argCount) {
 
   if (IS_NATIVE_METHOD(method)) {
     ObjNativeMethod* native = AS_NATIVE_METHOD(method);
-    if (argCount != native->arity) {
-      runtimeError("Expected %d arguments but got %d.",
-                   native->arity, argCount);
+    if (argCount < native->minArity || argCount > native->arity) {
+      if (native->minArity == native->arity) {
+        runtimeError("Expected %d arguments but got %d.",
+                     native->arity, argCount);
+      } else {
+        runtimeError("Expected %d to %d arguments but got %d.",
+                     native->minArity, native->arity, argCount);
+      }
       return false;
     }
 
@@ -1157,13 +1617,14 @@ static InterpretResult run(int baseFrame) {
         Value result = pop();
         closeUpvalues(frame->slots);
         vm.frameCount--;
-        if (vm.frameCount == baseFrame) {
-          pop();
-          return INTERPRET_OK;
-        }
 
         vm.stackTop = frame->slots;
         push(result);
+
+        if (vm.frameCount == baseFrame) {
+          return INTERPRET_OK;
+        }
+
         frame = &vm.frames[vm.frameCount - 1];
         break;
       }
@@ -1278,6 +1739,8 @@ static InterpretResult run(int baseFrame) {
           return modResult;
         }
 
+        pop(); // Discard module's return value.
+
         // Refresh frame pointer after recursive run().
         frame = &vm.frames[vm.frameCount - 1];
 
@@ -1298,9 +1761,10 @@ static InterpretResult run(int baseFrame) {
         }
         ExceptionHandler* handler =
             &vm.exceptionHandlers[vm.exceptionHandlerCount++];
+        handler->type = HANDLER_CATCH;
         handler->frameCount = vm.frameCount;
         handler->stackTop = vm.stackTop;
-        handler->catchIp = frame->ip + catchOffset;
+        handler->handlerIp = frame->ip + catchOffset;
         handler->frame = frame;
         break;
       }
@@ -1320,11 +1784,77 @@ static InterpretResult run(int baseFrame) {
         uint8_t slot = READ_BYTE();
         uint16_t jump = READ_SHORT();
         if (frame->argCount > slot) {
-          // Argument was provided, skip the default expression.
           frame->ip += jump;
         }
         break;
       }
+      case OP_SETUP_FINALLY: {
+        uint16_t finallyOffset = READ_SHORT();
+        if (vm.exceptionHandlerCount >= EXCEPTION_HANDLER_MAX) {
+          runtimeError("Too many nested exception handlers.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        ExceptionHandler* handler =
+            &vm.exceptionHandlers[vm.exceptionHandlerCount++];
+        handler->type = HANDLER_FINALLY;
+        handler->frameCount = vm.frameCount;
+        handler->stackTop = vm.stackTop;
+        handler->handlerIp = frame->ip + finallyOffset;
+        handler->frame = frame;
+        break;
+      }
+      case OP_ENTER_FINALLY: {
+        uint8_t completionType = READ_BYTE();
+        ExceptionHandler* handler =
+            &vm.exceptionHandlers[vm.exceptionHandlerCount - 1];
+        vm.exceptionHandlerCount--;
+        Value payload = NIL_VAL;
+        if (completionType == COMPLETE_RETURN ||
+            completionType == COMPLETE_BREAK ||
+            completionType == COMPLETE_CONTINUE) {
+          payload = pop();
+          // Restore stack to handler level (discard try/catch locals).
+          closeUpvalues(handler->stackTop);
+          vm.stackTop = handler->stackTop;
+        }
+        push(NUMBER_VAL((double)completionType));
+        push(payload);
+        break;
+      }
+      case OP_END_FINALLY: {
+        Value payload = pop();
+        int tag = (int)AS_NUMBER(pop());
+        switch (tag) {
+          case COMPLETE_NORMAL:
+            break;
+          case COMPLETE_EXCEPTION:
+            if (!throwException(payload)) {
+              return INTERPRET_RUNTIME_ERROR;
+            }
+            frame = &vm.frames[vm.frameCount - 1];
+            break;
+          case COMPLETE_RETURN: {
+            closeUpvalues(frame->slots);
+            vm.frameCount--;
+            if (vm.frameCount == baseFrame) {
+              pop();
+              return INTERPRET_OK;
+            }
+            vm.stackTop = frame->slots;
+            push(payload);
+            frame = &vm.frames[vm.frameCount - 1];
+            break;
+          }
+          case COMPLETE_BREAK:
+          case COMPLETE_CONTINUE:
+            frame->ip = frame->closure->function->chunk.code +
+                        (int)AS_NUMBER(payload);
+            break;
+        }
+        break;
+      }
+      case OP_NOP:
+        break;
     }
   }
 
@@ -1345,5 +1875,7 @@ InterpretResult interpret(const char* source) {
   push(OBJ_VAL(closure));
   call(closure, 0);
 
-  return run(0);
+  InterpretResult result = run(0);
+  if (result == INTERPRET_OK) pop();
+  return result;
 }

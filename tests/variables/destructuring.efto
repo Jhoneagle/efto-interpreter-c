@@ -1,0 +1,39 @@
+// Destructuring assignment.
+
+// Array destructuring.
+var [a, b, c] = [1, 2, 3];
+print a; // expect: 1
+print b; // expect: 2
+print c; // expect: 3
+
+// Skip elements.
+var [x, , z] = [10, 20, 30];
+print x; // expect: 10
+print z; // expect: 30
+
+// Map destructuring.
+var {name, age} = {"name": "Alice", "age": 30};
+print name; // expect: Alice
+print age;  // expect: 30
+
+// Map destructuring with rename.
+var {name: n, age: a2} = {"name": "Bob", "age": 25};
+print n;  // expect: Bob
+print a2; // expect: 25
+
+// In local scope.
+{
+  var [p, q] = [100, 200];
+  print p; // expect: 100
+  print q; // expect: 200
+}
+
+// From function return.
+fun pair() { return [3, 4]; }
+var [m, n2] = pair();
+print m;  // expect: 3
+print n2; // expect: 4
+
+// Single element.
+var [solo] = [42];
+print solo; // expect: 42

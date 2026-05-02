@@ -1,0 +1,60 @@
+// Finally block.
+
+// Normal path: finally runs after try.
+try {
+  print "try";    // expect: try
+} catch (e) {
+  print "catch";
+} finally {
+  print "finally"; // expect: finally
+}
+
+// Exception path: finally runs after catch.
+try {
+  throw "oops";
+} catch (e) {
+  print e;         // expect: oops
+} finally {
+  print "cleanup"; // expect: cleanup
+}
+
+// Try-finally without catch: finally runs, exception propagates.
+try {
+  try {
+    throw "inner";
+  } finally {
+    print "inner finally"; // expect: inner finally
+  }
+} catch (e) {
+  print e; // expect: inner
+}
+
+// Return through finally.
+fun test() {
+  try {
+    return "returned";
+  } finally {
+    print "before return"; // expect: before return
+  }
+}
+print test(); // expect: returned
+
+// Finally with no exception.
+try {
+  print "ok"; // expect: ok
+} finally {
+  print "done"; // expect: done
+}
+
+// Nested try-catch-finally.
+try {
+  try {
+    throw "err";
+  } catch (e) {
+    print "caught: " + e; // expect: caught: err
+  } finally {
+    print "inner done"; // expect: inner done
+  }
+} finally {
+  print "outer done"; // expect: outer done
+}

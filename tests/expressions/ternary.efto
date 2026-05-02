@@ -1,0 +1,22 @@
+// Ternary operator.
+print true ? "yes" : "no";    // expect: yes
+print false ? "yes" : "no";   // expect: no
+
+// With expressions.
+print 1 + 2 > 2 ? "big" : "small"; // expect: big
+
+// Nested ternary (right-associative).
+var x = 1;
+print x == 1 ? "one" : x == 2 ? "two" : "other"; // expect: one
+var y = 2;
+print y == 1 ? "one" : y == 2 ? "two" : "other"; // expect: two
+var z = 3;
+print z == 1 ? "one" : z == 2 ? "two" : "other"; // expect: other
+
+// In variable assignment.
+var a = 10 > 5 ? "yes" : "no";
+print a; // expect: yes
+
+// With function calls.
+fun double(n) { return n * 2; }
+print true ? double(5) : 0; // expect: 10

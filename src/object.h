@@ -89,6 +89,7 @@ typedef struct {
   Obj obj;
   NativeMethodFn function;
   int arity;
+  int minArity;
 } ObjNativeMethod;
 
 struct ObjString {

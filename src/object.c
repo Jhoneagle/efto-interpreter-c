@@ -104,6 +104,7 @@ ObjNativeMethod* newNativeMethod(NativeMethodFn function, int arity) {
                                           OBJ_NATIVE_METHOD);
   method->function = function;
   method->arity = arity;
+  method->minArity = arity;
   return method;
 }
 

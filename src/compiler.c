@@ -21,6 +21,7 @@ typedef struct {
 typedef enum {
   PREC_NONE,
   PREC_ASSIGNMENT,  // =
+  PREC_TERNARY,     // ?:
   PREC_OR,          // or
   PREC_AND,         // and
   PREC_EQUALITY,    // == !=
@@ -86,10 +87,18 @@ typedef struct Loop {
   int continueCount;
 } Loop;
 
+typedef struct FinallyContext {
+  struct FinallyContext* enclosing;
+  int scopeDepth;
+  int enterJumps[256];
+  int enterJumpCount;
+} FinallyContext;
+
 Parser parser;
 Compiler* current = NULL;
 ClassCompiler* currentClass = NULL;
 Loop* currentLoop = NULL;
+FinallyContext* currentFinally = NULL;
 Chunk* compilingChunk;
 
 static Chunk* currentChunk() {
@@ -655,6 +664,21 @@ static void or_(bool canAssign) {
   patchJump(endJump);
 }
 
+static void ternary(bool canAssign) {
+  // Condition already compiled as left operand.
+  int thenJump = emitJump(OP_JUMP_IF_FALSE);
+  emitByte(OP_POP);
+  parsePrecedence(PREC_TERNARY);
+
+  int elseJump = emitJump(OP_JUMP);
+  patchJump(thenJump);
+  emitByte(OP_POP);
+
+  consume(TOKEN_COLON, "Expect ':' in ternary expression.");
+  parsePrecedence(PREC_TERNARY);
+  patchJump(elseJump);
+}
+
 static uint8_t argumentList() {
   uint8_t argCount = 0;
 
@@ -843,6 +867,8 @@ ParseRule rules[] = {
   [TOKEN_TRY]           = {NULL,     NULL,   PREC_NONE},
   [TOKEN_CATCH]         = {NULL,     NULL,   PREC_NONE},
   [TOKEN_THROW]         = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_FINALLY]       = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_QUESTION]      = {NULL,     ternary, PREC_TERNARY},
   [TOKEN_COLON]         = {NULL,     NULL,   PREC_NONE},
   [TOKEN_LEFT_BRACKET]  = {arrayLiteral, subscript, PREC_CALL},
   [TOKEN_RIGHT_BRACKET] = {NULL,     NULL,   PREC_NONE},
@@ -888,15 +914,13 @@ static void addLocal(Token name) {
   // local->depth = current->scopeDepth;
 }
 
-static void declareVariable() {
+static void declareVariableByName(Token* name) {
   if (current->scopeDepth == 0) return;
-
-  Token* name = &parser.previous;
 
   for (int i = current->localCount - 1; i >= 0; i--) {
     Local* local = &current->locals[i];
     if (local->depth != -1 && local->depth < current->scopeDepth) {
-      break; 
+      break;
     }
 
     if (identifiersEqual(name, &local->name)) {
@@ -905,6 +929,10 @@ static void declareVariable() {
   }
 
   addLocal(*name);
+}
+
+static void declareVariable() {
+  declareVariableByName(&parser.previous);
 }
 
 static uint8_t parseVariable(const char* errorMessage) {
@@ -1081,7 +1109,143 @@ static void funDeclaration() {
   defineVariable(global);
 }
 
+static void arrayDestructure() {
+  advance(); // consume '['
+
+  Token names[256];
+  bool skip[256];
+  int count = 0;
+
+  if (!check(TOKEN_RIGHT_BRACKET)) {
+    do {
+      if (check(TOKEN_COMMA) || check(TOKEN_RIGHT_BRACKET)) {
+        skip[count] = true;
+        names[count] = syntheticToken("");
+      } else {
+        consume(TOKEN_IDENTIFIER, "Expect variable name.");
+        skip[count] = false;
+        names[count] = parser.previous;
+      }
+      count++;
+    } while (match(TOKEN_COMMA));
+  }
+
+  consume(TOKEN_RIGHT_BRACKET, "Expect ']' after destructuring pattern.");
+  if (count == 0) {
+    error("Expect at least one variable in destructuring pattern.");
+    return;
+  }
+  consume(TOKEN_EQUAL, "Destructuring requires an initializer.");
+  expression();
+  consume(TOKEN_SEMICOLON, "Expect ';' after variable declaration.");
+
+  bool isLocal = (current->scopeDepth > 0);
+
+  if (isLocal) {
+    addLocal(syntheticToken(""));
+    markInitialized();
+    int hiddenSlot = current->localCount - 1;
+
+    for (int i = 0; i < count; i++) {
+      if (skip[i]) continue;
+      emitBytes(OP_GET_LOCAL, (uint8_t)hiddenSlot);
+      emitConstant(NUMBER_VAL(i));
+      emitByte(OP_INDEX_GET);
+      declareVariableByName(&names[i]);
+      markInitialized();
+    }
+  } else {
+    // Global scope: DUP-based approach.
+    // Find last non-skipped index.
+    int lastNonSkipped = -1;
+    for (int i = count - 1; i >= 0; i--) {
+      if (!skip[i]) { lastNonSkipped = i; break; }
+    }
+
+    for (int i = 0; i < count; i++) {
+      if (skip[i]) continue;
+      if (i != lastNonSkipped) {
+        emitBytes(OP_DUP, 0);
+      }
+      emitConstant(NUMBER_VAL(i));
+      emitByte(OP_INDEX_GET);
+      uint8_t nameConst = identifierConstant(&names[i]);
+      emitBytes(OP_DEFINE_GLOBAL, nameConst);
+    }
+
+    if (lastNonSkipped == -1) {
+      emitByte(OP_POP);
+    }
+  }
+}
+
+static void mapDestructure() {
+  advance(); // consume '{'
+
+  Token keys[256];
+  Token varNames[256];
+  int count = 0;
+
+  if (!check(TOKEN_RIGHT_BRACE)) {
+    do {
+      consume(TOKEN_IDENTIFIER, "Expect property name.");
+      keys[count] = parser.previous;
+      varNames[count] = parser.previous;
+
+      if (match(TOKEN_COLON)) {
+        consume(TOKEN_IDENTIFIER, "Expect variable name after ':'.");
+        varNames[count] = parser.previous;
+      }
+      count++;
+    } while (match(TOKEN_COMMA));
+  }
+
+  consume(TOKEN_RIGHT_BRACE, "Expect '}' after destructuring pattern.");
+  if (count == 0) {
+    error("Expect at least one variable in destructuring pattern.");
+    return;
+  }
+  consume(TOKEN_EQUAL, "Destructuring requires an initializer.");
+  expression();
+  consume(TOKEN_SEMICOLON, "Expect ';' after variable declaration.");
+
+  bool isLocal = (current->scopeDepth > 0);
+
+  if (isLocal) {
+    addLocal(syntheticToken(""));
+    markInitialized();
+    int hiddenSlot = current->localCount - 1;
+
+    for (int i = 0; i < count; i++) {
+      emitBytes(OP_GET_LOCAL, (uint8_t)hiddenSlot);
+      emitConstant(OBJ_VAL(copyString(keys[i].start, keys[i].length)));
+      emitByte(OP_INDEX_GET);
+      declareVariableByName(&varNames[i]);
+      markInitialized();
+    }
+  } else {
+    for (int i = 0; i < count; i++) {
+      if (i < count - 1) {
+        emitBytes(OP_DUP, 0);
+      }
+      emitConstant(OBJ_VAL(copyString(keys[i].start, keys[i].length)));
+      emitByte(OP_INDEX_GET);
+      uint8_t nameConst = identifierConstant(&varNames[i]);
+      emitBytes(OP_DEFINE_GLOBAL, nameConst);
+    }
+  }
+}
+
 static void varDeclaration() {
+  if (check(TOKEN_LEFT_BRACKET)) {
+    arrayDestructure();
+    return;
+  }
+  if (check(TOKEN_LEFT_BRACE)) {
+    mapDestructure();
+    return;
+  }
+
   uint8_t global = parseVariable("Expect variable name.");
 
   if (match(TOKEN_EQUAL)) {
@@ -1422,13 +1586,32 @@ static void switchStatement() {
   endScope();
 }
 
+static void emitCleanupToScope(int targetDepth) {
+  for (int i = current->localCount - 1; i >= 0; i--) {
+    if (current->locals[i].depth != -1 &&
+        current->locals[i].depth <= targetDepth) break;
+    if (current->locals[i].isCaptured) {
+      emitByte(OP_CLOSE_UPVALUE);
+    } else {
+      emitByte(OP_POP);
+    }
+  }
+}
+
 static void returnStatement() {
   if (current->type == TYPE_SCRIPT) {
     error("Can't return from top-level code.");
   }
 
   if (match(TOKEN_SEMICOLON)) {
-    emitReturn();
+    if (currentFinally != NULL) {
+      emitByte(OP_NIL);
+      emitBytes(OP_ENTER_FINALLY, COMPLETE_RETURN);
+      currentFinally->enterJumps[currentFinally->enterJumpCount++] =
+          emitJump(OP_JUMP);
+    } else {
+      emitReturn();
+    }
   } else {
     if (current->type == TYPE_INITIALIZER) {
       error("Can't return a value from an initializer.");
@@ -1436,7 +1619,14 @@ static void returnStatement() {
 
     expression();
     consume(TOKEN_SEMICOLON, "Expect ';' after return value.");
-    emitByte(OP_RETURN);
+
+    if (currentFinally != NULL) {
+      emitBytes(OP_ENTER_FINALLY, COMPLETE_RETURN);
+      currentFinally->enterJumps[currentFinally->enterJumpCount++] =
+          emitJump(OP_JUMP);
+    } else {
+      emitByte(OP_RETURN);
+    }
   }
 }
 
@@ -1505,44 +1695,115 @@ static void throwStatement() {
 }
 
 static void tryStatement() {
-  // Emit OP_TRY with placeholder offset to the catch block.
-  int tryJump = emitJump(OP_TRY);
+  // Speculatively emit OP_SETUP_FINALLY (NOP'd out if no finally).
+  int setupFinallyPos = currentChunk()->count;
+  emitByte(OP_SETUP_FINALLY);
+  emitByte(0xff);
+  emitByte(0xff);
 
-  // Compile the try body.
+  // Speculatively emit OP_TRY (NOP'd out if no catch).
+  int setupTryPos = currentChunk()->count;
+  emitByte(OP_TRY);
+  emitByte(0xff);
+  emitByte(0xff);
+
+  // Push finally context.
+  FinallyContext finallyCtx;
+  finallyCtx.enclosing = currentFinally;
+  finallyCtx.scopeDepth = current->scopeDepth;
+  finallyCtx.enterJumpCount = 0;
+  currentFinally = &finallyCtx;
+
+  // Compile try body.
   consume(TOKEN_LEFT_BRACE, "Expect '{' after 'try'.");
   beginScope();
   block();
   endScope();
 
-  // Normal exit: remove the exception handler.
+  // Normal exit: pop catch handler if it was pushed.
+  int endTryPos = currentChunk()->count;
   emitByte(OP_END_TRY);
 
-  // Jump over the catch block.
+  // Jump over catch block.
   int skipCatch = emitJump(OP_JUMP);
 
-  // Patch the try jump to here (start of catch).
-  patchJump(tryJump);
+  int catchStart = currentChunk()->count;
 
-  // Compile the catch block.
-  consume(TOKEN_CATCH, "Expect 'catch' after try block.");
+  bool hasCatch = false;
+  if (match(TOKEN_CATCH)) {
+    hasCatch = true;
 
-  beginScope();
-  if (match(TOKEN_LEFT_PAREN)) {
-    // catch (e) — bind the exception to a local variable.
-    consume(TOKEN_IDENTIFIER, "Expect variable name in catch.");
-    addLocal(parser.previous);
-    markInitialized();
-    consume(TOKEN_RIGHT_PAREN, "Expect ')' after catch variable.");
-  } else {
-    // catch { ... } — no variable, pop the exception value.
-    emitByte(OP_POP);
+    // Patch OP_TRY to point to catch start.
+    int tryOffset = catchStart - (setupTryPos + 3);
+    currentChunk()->code[setupTryPos + 1] = (tryOffset >> 8) & 0xff;
+    currentChunk()->code[setupTryPos + 2] = tryOffset & 0xff;
+
+    beginScope();
+    if (match(TOKEN_LEFT_PAREN)) {
+      consume(TOKEN_IDENTIFIER, "Expect variable name in catch.");
+      addLocal(parser.previous);
+      markInitialized();
+      consume(TOKEN_RIGHT_PAREN, "Expect ')' after catch variable.");
+    } else {
+      emitByte(OP_POP);
+    }
+
+    consume(TOKEN_LEFT_BRACE, "Expect '{' after catch.");
+    block();
+    endScope();
   }
 
-  consume(TOKEN_LEFT_BRACE, "Expect '{' after catch.");
-  block();
-  endScope();
-
   patchJump(skipCatch);
+
+  if (!hasCatch) {
+    // NOP out OP_TRY and OP_END_TRY.
+    currentChunk()->code[setupTryPos] = OP_NOP;
+    currentChunk()->code[setupTryPos + 1] = OP_NOP;
+    currentChunk()->code[setupTryPos + 2] = OP_NOP;
+    currentChunk()->code[endTryPos] = OP_NOP;
+  }
+
+  bool hasFinally = false;
+  if (match(TOKEN_FINALLY)) {
+    hasFinally = true;
+
+    // Emit OP_ENTER_FINALLY for normal path.
+    emitBytes(OP_ENTER_FINALLY, COMPLETE_NORMAL);
+
+    // Patch all enter-finally jumps (return/break/continue through finally).
+    for (int i = 0; i < finallyCtx.enterJumpCount; i++) {
+      patchJump(finallyCtx.enterJumps[i]);
+    }
+
+    // Patch OP_SETUP_FINALLY to point here (start of finally body).
+    int finallyStart = currentChunk()->count;
+    int finallyOffset = finallyStart - (setupFinallyPos + 3);
+    currentChunk()->code[setupFinallyPos + 1] =
+        (finallyOffset >> 8) & 0xff;
+    currentChunk()->code[setupFinallyPos + 2] =
+        finallyOffset & 0xff;
+
+    consume(TOKEN_LEFT_BRACE, "Expect '{' after 'finally'.");
+    beginScope();
+    block();
+    endScope();
+
+    emitByte(OP_END_FINALLY);
+  }
+
+  if (!hasFinally) {
+    // NOP out OP_SETUP_FINALLY.
+    currentChunk()->code[setupFinallyPos] = OP_NOP;
+    currentChunk()->code[setupFinallyPos + 1] = OP_NOP;
+    currentChunk()->code[setupFinallyPos + 2] = OP_NOP;
+  }
+
+  // Pop finally context.
+  currentFinally = finallyCtx.enclosing;
+
+  if (!hasCatch && !hasFinally) {
+    error("Expect 'catch' or 'finally' after try block.");
+  }
 }
 
 static void synchronize() {

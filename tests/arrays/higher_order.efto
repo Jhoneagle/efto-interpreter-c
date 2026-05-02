@@ -1,0 +1,61 @@
+// Higher-order array methods.
+
+var arr = [1, 2, 3, 4, 5];
+
+// map.
+var doubled = arr.map((x) => x * 2);
+print doubled; // expect: [2, 4, 6, 8, 10]
+
+// filter.
+var evens = arr.filter((x) => x % 2 == 0);
+print evens; // expect: [2, 4]
+
+// reduce with initial value.
+var sum = arr.reduce((acc, x) => acc + x, 0);
+print sum; // expect: 15
+
+// reduce without initial value.
+var product = [1, 2, 3, 4].reduce((acc, x) => acc * x);
+print product; // expect: 24
+
+// forEach.
+var result = [];
+arr.forEach((x) => {
+  result.push(x * 10);
+});
+print result; // expect: [10, 20, 30, 40, 50]
+
+// find.
+var found = arr.find((x) => x > 3);
+print found; // expect: 4
+
+var notFound = arr.find((x) => x > 10);
+print notFound; // expect: nil
+
+// findIndex.
+print arr.findIndex((x) => x == 3); // expect: 2
+print arr.findIndex((x) => x == 9); // expect: -1
+
+// all.
+print arr.all((x) => x > 0);  // expect: true
+print arr.all((x) => x > 3);  // expect: false
+
+// any.
+print arr.any((x) => x > 4);  // expect: true
+print arr.any((x) => x > 10); // expect: false
+
+// Chaining.
+var result2 = [1, 2, 3, 4, 5, 6]
+  .filter((x) => x % 2 == 0)
+  .map((x) => x * x);
+print result2; // expect: [4, 16, 36]
+
+// With named function.
+fun isPositive(x) { return x > 0; }
+print [-1, 0, 1, 2].filter(isPositive); // expect: [1, 2]
+
+// Empty array.
+print [].map((x) => x * 2);    // expect: []
+print [].filter((x) => true);  // expect: []
+print [].all((x) => false);    // expect: true
+print [].any((x) => true);     // expect: false
