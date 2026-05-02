@@ -236,6 +236,7 @@ static void markRoots() {
 
   markTable(&vm.globals);
   markCompilerRoots();
+  markValue(vm.currentException);
   markObject((Obj*)vm.initString);
   markObject((Obj*)vm.arrayMethods);
   markObject((Obj*)vm.mapMethods);

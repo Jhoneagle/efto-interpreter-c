@@ -93,6 +93,23 @@ static void skipWhitespace() {
         if (peekNext() == '/') {
           // A comment goes until the end of the line.
           while (peek() != '\n' && !isAtEnd()) advance();
+        } else if (peekNext() == '*') {
+          // Multi-line comment with nesting support.
+          advance(); // skip /
+          advance(); // skip *
+          int depth = 1;
+          while (depth > 0 && !isAtEnd()) {
+            if (peek() == '/' && peekNext() == '*') {
+              advance(); advance();
+              depth++;
+            } else if (peek() == '*' && peekNext() == '/') {
+              advance(); advance();
+              depth--;
+            } else {
+              if (peek() == '\n') scanner.line++;
+              advance();
+            }
+          }
         } else {
           return;
         }
@@ -128,7 +145,14 @@ static TokenType identifierType() {
       if (scanner.current - scanner.start > 1) {
         switch (scanner.start[1]) {
           case 'l': return checkKeyword(2, 3, "ass", TOKEN_CLASS);
-          case 'a': return checkKeyword(2, 2, "se", TOKEN_CASE);
+          case 'a':
+            if (scanner.current - scanner.start > 2) {
+              switch (scanner.start[2]) {
+                case 's': return checkKeyword(2, 2, "se", TOKEN_CASE);
+                case 't': return checkKeyword(2, 3, "tch", TOKEN_CATCH);
+              }
+            }
+            break;
           case 'o': return checkKeyword(2, 6, "ntinue", TOKEN_CONTINUE);
         }
       }
@@ -169,8 +193,22 @@ static TokenType identifierType() {
     case 't':
       if (scanner.current - scanner.start > 1) {
         switch (scanner.start[1]) {
-          case 'h': return checkKeyword(2, 2, "is", TOKEN_THIS);
-          case 'r': return checkKeyword(2, 2, "ue", TOKEN_TRUE);
+          case 'h':
+            if (scanner.current - scanner.start > 2) {
+              switch (scanner.start[2]) {
+                case 'i': return checkKeyword(2, 2, "is", TOKEN_THIS);
+                case 'r': return checkKeyword(3, 2, "ow", TOKEN_THROW);
+              }
+            }
+            break;
+          case 'r':
+            if (scanner.current - scanner.start > 2) {
+              switch (scanner.start[2]) {
+                case 'u': return checkKeyword(2, 2, "ue", TOKEN_TRUE);
+                case 'y': return checkKeyword(2, 1, "y", TOKEN_TRY);
+              }
+            }
+            break;
         }
       }
       break;
@@ -203,6 +241,14 @@ static Token number() {
 
 static Token stringContinuation() {
   while (peek() != '"' && !isAtEnd()) {
+    if (peek() == '\\' && !isAtEnd()) {
+      advance(); // skip backslash
+      if (!isAtEnd()) {
+        if (peek() == '\n') scanner.line++;
+        advance(); // skip escaped char
+      }
+      continue;
+    }
     if (peek() == '\n') scanner.line++;
     if (peek() == '$' && peekNext() == '{') {
       Token token = makeToken(TOKEN_INTERPOLATION);
@@ -224,6 +270,14 @@ static Token stringContinuation() {
 
 static Token string() {
   while (peek() != '"' && !isAtEnd()) {
+    if (peek() == '\\' && !isAtEnd()) {
+      advance(); // skip backslash
+      if (!isAtEnd()) {
+        if (peek() == '\n') scanner.line++;
+        advance(); // skip escaped char
+      }
+      continue;
+    }
     if (peek() == '\n') scanner.line++;
     if (peek() == '$' && peekNext() == '{') {
       // Interpolated string: token covers from opening " to just before ${

@@ -17,6 +17,8 @@
 VM vm;
 
 static void runtimeError(const char* format, ...);
+static void closeUpvalues(Value* last);
+static ObjString* stringify(Value value);
 
 static Value clockNative(int argCount, Value* args) {
   return NUMBER_VAL((double)clock() / CLOCKS_PER_SEC);
@@ -258,6 +260,8 @@ static void resetStack() {
   vm.stackTop = vm.stack;
   vm.frameCount = 0;
   vm.openUpvalues = NULL;
+  vm.exceptionHandlerCount = 0;
+  vm.currentException = NIL_VAL;
 }
 
 static void runtimeError(const char* format, ...) {
@@ -281,6 +285,39 @@ static void runtimeError(const char* format, ...) {
   }
 
   resetStack();
+}
+
+static bool throwException(Value value) {
+  vm.currentException = value;
+
+  while (vm.exceptionHandlerCount > 0) {
+    ExceptionHandler* handler =
+        &vm.exceptionHandlers[vm.exceptionHandlerCount - 1];
+    vm.exceptionHandlerCount--;
+
+    // Restore VM state to when the try block was entered.
+    vm.stackTop = handler->stackTop;
+    vm.frameCount = handler->frameCount;
+
+    // Close any open upvalues above the restored stack top.
+    closeUpvalues(vm.stackTop);
+
+    // Push the exception value for the catch block.
+    push(value);
+
+    // Jump to the catch block.
+    handler->frame->ip = handler->catchIp;
+    return true;
+  }
+
+  // No handler found — print as runtime error.
+  if (IS_STRING(value)) {
+    runtimeError("%s", AS_STRING(value)->chars);
+  } else {
+    ObjString* str = stringify(value);
+    runtimeError("%s", str->chars);
+  }
+  return false;
 }
 
 static void defineNative(const char* name, NativeFn function) {
@@ -1238,6 +1275,32 @@ static InterpretResult run(int baseFrame) {
         pop(); // module (GC protect)
         pop(); // pathStr (GC protect)
         push(OBJ_VAL(module));
+        break;
+      }
+      case OP_TRY: {
+        uint16_t catchOffset = READ_SHORT();
+        if (vm.exceptionHandlerCount >= EXCEPTION_HANDLER_MAX) {
+          runtimeError("Too many nested exception handlers.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        ExceptionHandler* handler =
+            &vm.exceptionHandlers[vm.exceptionHandlerCount++];
+        handler->frameCount = vm.frameCount;
+        handler->stackTop = vm.stackTop;
+        handler->catchIp = frame->ip + catchOffset;
+        handler->frame = frame;
+        break;
+      }
+      case OP_END_TRY: {
+        vm.exceptionHandlerCount--;
+        break;
+      }
+      case OP_THROW: {
+        Value value = pop();
+        if (!throwException(value)) {
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        frame = &vm.frames[vm.frameCount - 1];
         break;
       }
     }

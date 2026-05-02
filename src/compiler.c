@@ -281,6 +281,37 @@ static void declaration();
 static ParseRule* getRule(TokenType type);
 static void parsePrecedence(Precedence precedence);
 
+static char* processEscapes(const char* source, int sourceLen,
+                            int* outLen) {
+  char* result = (char*)malloc(sourceLen + 1);
+  int j = 0;
+  for (int i = 0; i < sourceLen; i++) {
+    if (source[i] == '\\' && i + 1 < sourceLen) {
+      switch (source[i + 1]) {
+        case 'n':  result[j++] = '\n'; i++; break;
+        case 't':  result[j++] = '\t'; i++; break;
+        case 'r':  result[j++] = '\r'; i++; break;
+        case '\\': result[j++] = '\\'; i++; break;
+        case '"':  result[j++] = '"';  i++; break;
+        case '0':  result[j++] = '\0'; i++; break;
+        default:   result[j++] = source[i]; break;
+      }
+    } else {
+      result[j++] = source[i];
+    }
+  }
+  result[j] = '\0';
+  *outLen = j;
+  return result;
+}
+
+static void emitStringConstant(const char* text, int len) {
+  int escapedLen;
+  char* escaped = processEscapes(text, len, &escapedLen);
+  emitConstant(OBJ_VAL(copyString(escaped, escapedLen)));
+  free(escaped);
+}
+
 static void binary(bool canAssign) {
   TokenType operatorType = parser.previous.type;
   ParseRule* rule = getRule(operatorType);
@@ -322,8 +353,8 @@ static void number(bool canAssign) {
 }
 
 static void string(bool canAssign) {
-  emitConstant(OBJ_VAL(copyString(parser.previous.start + 1,
-                                  parser.previous.length - 2)));
+  emitStringConstant(parser.previous.start + 1,
+                     parser.previous.length - 2);
 }
 
 static void interpolation(bool canAssign) {
@@ -337,7 +368,7 @@ static void interpolation(bool canAssign) {
   }
 
   // Emit the leading text as a string constant.
-  emitConstant(OBJ_VAL(copyString(text, len)));
+  emitStringConstant(text, len);
 
   // Parse the interpolated expression.
   expression();
@@ -349,7 +380,7 @@ static void interpolation(bool canAssign) {
     const char* partText = parser.previous.start;
     int partLen = parser.previous.length;
     if (partLen > 0) {
-      emitConstant(OBJ_VAL(copyString(partText, partLen)));
+      emitStringConstant(partText, partLen);
       emitByte(OP_ADD);
     }
     expression();
@@ -366,7 +397,7 @@ static void interpolation(bool canAssign) {
     endLen--;
   }
   if (endLen > 0) {
-    emitConstant(OBJ_VAL(copyString(endText, endLen)));
+    emitStringConstant(endText, endLen);
     emitByte(OP_ADD);
   }
 }
@@ -718,6 +749,9 @@ ParseRule rules[] = {
   [TOKEN_IMPORT]        = {NULL,     NULL,   PREC_NONE},
   [TOKEN_AS]            = {NULL,     NULL,   PREC_NONE},
   [TOKEN_FROM]          = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_TRY]           = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_CATCH]         = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_THROW]         = {NULL,     NULL,   PREC_NONE},
   [TOKEN_COLON]         = {NULL,     NULL,   PREC_NONE},
   [TOKEN_LEFT_BRACKET]  = {arrayLiteral, subscript, PREC_CALL},
   [TOKEN_RIGHT_BRACKET] = {NULL,     NULL,   PREC_NONE},
@@ -1340,6 +1374,53 @@ static void continueStatement() {
   }
 }
 
+static void throwStatement() {
+  expression();
+  consume(TOKEN_SEMICOLON, "Expect ';' after throw value.");
+  emitByte(OP_THROW);
+}
+
+static void tryStatement() {
+  // Emit OP_TRY with placeholder offset to the catch block.
+  int tryJump = emitJump(OP_TRY);
+
+  // Compile the try body.
+  consume(TOKEN_LEFT_BRACE, "Expect '{' after 'try'.");
+  beginScope();
+  block();
+  endScope();
+
+  // Normal exit: remove the exception handler.
+  emitByte(OP_END_TRY);
+
+  // Jump over the catch block.
+  int skipCatch = emitJump(OP_JUMP);
+
+  // Patch the try jump to here (start of catch).
+  patchJump(tryJump);
+
+  // Compile the catch block.
+  consume(TOKEN_CATCH, "Expect 'catch' after try block.");
+
+  beginScope();
+  if (match(TOKEN_LEFT_PAREN)) {
+    // catch (e) — bind the exception to a local variable.
+    consume(TOKEN_IDENTIFIER, "Expect variable name in catch.");
+    addLocal(parser.previous);
+    markInitialized();
+    consume(TOKEN_RIGHT_PAREN, "Expect ')' after catch variable.");
+  } else {
+    // catch { ... } — no variable, pop the exception value.
+    emitByte(OP_POP);
+  }
+
+  consume(TOKEN_LEFT_BRACE, "Expect '{' after catch.");
+  block();
+  endScope();
+
+  patchJump(skipCatch);
+}
+
 static void synchronize() {
   parser.panicMode = false;
 
@@ -1358,6 +1439,8 @@ static void synchronize() {
       case TOKEN_BREAK:
       case TOKEN_CONTINUE:
       case TOKEN_IMPORT:
+      case TOKEN_TRY:
+      case TOKEN_THROW:
         return;
 
       default:
@@ -1491,6 +1574,10 @@ static void statement() {
     breakStatement();
   } else if (match(TOKEN_CONTINUE)) {
     continueStatement();
+  } else if (match(TOKEN_TRY)) {
+    tryStatement();
+  } else if (match(TOKEN_THROW)) {
+    throwStatement();
   } else if (match(TOKEN_LEFT_BRACE)) {
     beginScope();
     block();

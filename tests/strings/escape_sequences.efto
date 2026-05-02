@@ -1,0 +1,17 @@
+// String escape sequences.
+print "hello\nworld";
+// expect: hello
+// expect: world
+
+print "tab\there";     // expect: tab	here
+print "back\\slash";   // expect: back\slash
+print "say \"hi\"";    // expect: say "hi"
+print "cr\rtest";      // expect: cr
+// expect: test
+
+// Escape in interpolation.
+var x = 42;
+print "val:\t${x}";   // expect: val:	42
+
+// No escape — regular characters after backslash pass through.
+print "no escape \a";  // expect: no escape \a

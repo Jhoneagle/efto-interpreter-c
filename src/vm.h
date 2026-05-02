@@ -8,12 +8,20 @@
 
 #define FRAMES_MAX 64
 #define STACK_MAX (FRAMES_MAX * UINT8_COUNT)
+#define EXCEPTION_HANDLER_MAX 64
 
 typedef struct {
   ObjClosure* closure;
   uint8_t* ip;
   Value* slots;
 } CallFrame;
+
+typedef struct {
+  int frameCount;
+  Value* stackTop;
+  uint8_t* catchIp;
+  CallFrame* frame;
+} ExceptionHandler;
 
 typedef struct {
   CallFrame frames[FRAMES_MAX];
@@ -32,6 +40,9 @@ typedef struct {
   int searchPathCount;
   size_t bytesAllocated;
   size_t nextGC;
+  ExceptionHandler exceptionHandlers[EXCEPTION_HANDLER_MAX];
+  int exceptionHandlerCount;
+  Value currentException;
   Obj* objects;
   int grayCount;
   int grayCapacity;

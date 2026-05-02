@@ -1,0 +1,66 @@
+// Try/catch/throw.
+
+// Basic throw and catch.
+try {
+  throw "error!";
+} catch (e) {
+  print e; // expect: error!
+}
+
+// Code after try/catch continues normally.
+print "continues"; // expect: continues
+
+// Catch without variable.
+try {
+  throw "ignored";
+} catch {
+  print "caught"; // expect: caught
+}
+
+// Throw non-string values.
+try {
+  throw 42;
+} catch (e) {
+  print e; // expect: 42
+}
+
+// Nested try/catch — inner catches.
+try {
+  try {
+    throw "inner";
+  } catch (e) {
+    print e; // expect: inner
+  }
+  print "outer ok"; // expect: outer ok
+} catch (e) {
+  print "should not reach";
+}
+
+// Nested try/catch — inner rethrows to outer.
+try {
+  try {
+    throw "rethrown";
+  } catch (e) {
+    throw e;
+  }
+} catch (e) {
+  print e; // expect: rethrown
+}
+
+// Throw from a function.
+fun boom() {
+  throw "kaboom";
+}
+
+try {
+  boom();
+} catch (e) {
+  print e; // expect: kaboom
+}
+
+// Normal try block (no throw) skips catch.
+try {
+  print "no error"; // expect: no error
+} catch (e) {
+  print "should not print";
+}

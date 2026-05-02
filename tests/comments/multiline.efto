@@ -1,0 +1,17 @@
+// Multi-line comments.
+/* This is a multi-line comment */
+print "after comment"; // expect: after comment
+
+/* Comment
+   spanning
+   multiple lines */
+print "multi-line"; // expect: multi-line
+
+/* Nested /* inner comment */ outer */
+print "nested"; // expect: nested
+
+var x = 5 /* inline */ + 10;
+print x; // expect: 15
+
+/* Deeply /* nested /* three levels */ back */ done */
+print "deep"; // expect: deep
