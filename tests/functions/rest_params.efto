@@ -1,0 +1,51 @@
+// Basic rest parameter.
+fun sum(first, ...rest) {
+  var total = first;
+  for (var i = 0; i < rest.length; i = i + 1) {
+    total = total + rest[i];
+  }
+  return total;
+}
+print sum(1);           // expect: 1
+print sum(1, 2, 3);     // expect: 6
+print sum(10, 20);      // expect: 30
+
+// Rest with zero extra args.
+fun f(a, ...rest) {
+  print a;
+  print rest.length;
+}
+f(42);
+// expect: 42
+// expect: 0
+
+// Rest collects as array.
+fun show(...args) {
+  print typeof args;
+  print args.length;
+  print args[0];
+  print args[1];
+}
+show("hello", "world");
+// expect: array
+// expect: 2
+// expect: hello
+// expect: world
+
+// Rest with arrow function.
+var add = (a, ...rest) => {
+  var total = a;
+  rest.forEach((x) => { total = total + x; });
+  return total;
+};
+print add(1, 2, 3, 4);  // expect: 10
+
+// Spread and rest together.
+fun collect(...items) {
+  return items;
+}
+var arr = [1, 2, 3];
+var result = collect(...arr);
+print result.length;  // expect: 3
+print result[0];      // expect: 1
+print result[2];      // expect: 3

@@ -65,6 +65,172 @@ static bool arraySlice(Value receiver, int argCount, Value* args,
   return true;
 }
 
+static int sortTypeOrdinal(Value v) {
+  if (IS_NIL(v)) return 0;
+  if (IS_BOOL(v)) return 1;
+  if (IS_NUMBER(v)) return 2;
+  if (IS_STRING(v)) return 3;
+  return 4; // non-sortable
+}
+
+static int sortCompare(const void* a, const void* b) {
+  Value va = *(const Value*)a;
+  Value vb = *(const Value*)b;
+  int ta = sortTypeOrdinal(va);
+  int tb = sortTypeOrdinal(vb);
+
+  if (ta != tb) return (ta < tb) ? -1 : 1;
+
+  switch (ta) {
+    case 0: return 0; // nil == nil
+    case 1: {
+      bool ba = AS_BOOL(va), bb = AS_BOOL(vb);
+      return (ba == bb) ? 0 : (ba ? 1 : -1);
+    }
+    case 2: {
+      double da = AS_NUMBER(va), db = AS_NUMBER(vb);
+      return (da < db) ? -1 : (da > db) ? 1 : 0;
+    }
+    case 3:
+      return strcmp(AS_CSTRING(va), AS_CSTRING(vb));
+    default:
+      return 0; // should not be reached
+  }
+}
+
+static bool arraySort(Value receiver, int argCount, Value* args,
+                      Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+
+  // Validate all elements are sortable primitives.
+  for (int i = 0; i < array->elements.count; i++) {
+    Value v = array->elements.values[i];
+    if (sortTypeOrdinal(v) >= 4) {
+      const char* typeName = "unknown";
+      if (IS_OBJ(v)) {
+        switch (OBJ_TYPE(v)) {
+          case OBJ_ARRAY: typeName = "array"; break;
+          case OBJ_MAP: typeName = "map"; break;
+          case OBJ_CLASS: typeName = "class"; break;
+          case OBJ_INSTANCE: typeName = "instance"; break;
+          case OBJ_FUNCTION: case OBJ_CLOSURE:
+          case OBJ_NATIVE: case OBJ_NATIVE_METHOD:
+            typeName = "function"; break;
+          case OBJ_FILE: typeName = "file"; break;
+          case OBJ_MODULE: typeName = "module"; break;
+          default: break;
+        }
+      }
+      runtimeError("Cannot compare values of type '%s'.", typeName);
+      return false;
+    }
+  }
+
+  qsort(array->elements.values, array->elements.count,
+        sizeof(Value), sortCompare);
+  *result = receiver;
+  return true;
+}
+
+static bool arrayReverse(Value receiver, int argCount, Value* args,
+                         Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  int count = array->elements.count;
+  for (int i = 0; i < count / 2; i++) {
+    Value tmp = array->elements.values[i];
+    array->elements.values[i] = array->elements.values[count - 1 - i];
+    array->elements.values[count - 1 - i] = tmp;
+  }
+  *result = receiver;
+  return true;
+}
+
+static bool arrayJoin(Value receiver, int argCount, Value* args,
+                      Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  if (!IS_STRING(args[0])) {
+    runtimeError("join separator must be a string.");
+    return false;
+  }
+  ObjString* sep = AS_STRING(args[0]);
+
+  if (array->elements.count == 0) {
+    *result = OBJ_VAL(copyString("", 0));
+    return true;
+  }
+
+  // GC protect receiver and separator.
+  push(receiver);
+  push(args[0]);
+
+  // Stringify all elements and compute total length.
+  int count = array->elements.count;
+  ObjString** parts = (ObjString**)malloc(sizeof(ObjString*) * count);
+  int totalLen = 0;
+  for (int i = 0; i < count; i++) {
+    parts[i] = stringify(array->elements.values[i]);
+    push(OBJ_VAL(parts[i])); // GC protect each part
+    totalLen += parts[i]->length;
+    if (i > 0) totalLen += sep->length;
+  }
+
+  char* buffer = ALLOCATE(char, totalLen + 1);
+  char* dst = buffer;
+  for (int i = 0; i < count; i++) {
+    if (i > 0) {
+      memcpy(dst, sep->chars, sep->length);
+      dst += sep->length;
+    }
+    memcpy(dst, parts[i]->chars, parts[i]->length);
+    dst += parts[i]->length;
+  }
+  buffer[totalLen] = '\0';
+
+  // Pop GC protections: count parts + separator + receiver.
+  for (int i = 0; i < count + 2; i++) pop();
+  free(parts);
+
+  *result = OBJ_VAL(takeString(buffer, totalLen));
+  return true;
+}
+
+static bool arrayFlat(Value receiver, int argCount, Value* args,
+                      Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  ObjArray* flat = newArray();
+  push(OBJ_VAL(flat)); // GC protection
+
+  for (int i = 0; i < array->elements.count; i++) {
+    Value elem = array->elements.values[i];
+    if (IS_ARRAY(elem)) {
+      ObjArray* inner = AS_ARRAY(elem);
+      for (int j = 0; j < inner->elements.count; j++) {
+        writeValueArray(&flat->elements, inner->elements.values[j]);
+      }
+    } else {
+      writeValueArray(&flat->elements, elem);
+    }
+  }
+
+  pop(); // remove GC protection
+  *result = OBJ_VAL(flat);
+  return true;
+}
+
+static bool arrayIndexOf(Value receiver, int argCount, Value* args,
+                         Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  Value search = args[0];
+  for (int i = 0; i < array->elements.count; i++) {
+    if (valuesEqual(array->elements.values[i], search)) {
+      *result = NUMBER_VAL((double)i);
+      return true;
+    }
+  }
+  *result = NUMBER_VAL(-1);
+  return true;
+}
+
 // --- Map native methods ---
 
 static bool mapHas(Value receiver, int argCount, Value* args,
@@ -506,6 +672,148 @@ static bool stringTrim(Value receiver, int argCount, Value* args,
   return true;
 }
 
+static bool stringReplace(Value receiver, int argCount, Value* args,
+                          Value* result) {
+  ObjString* str = AS_STRING(receiver);
+  if (!IS_STRING(args[0]) || !IS_STRING(args[1])) {
+    runtimeError("replace arguments must be strings.");
+    return false;
+  }
+  ObjString* search = AS_STRING(args[0]);
+  ObjString* repl = AS_STRING(args[1]);
+
+  if (search->length == 0) {
+    *result = receiver;
+    return true;
+  }
+
+  // First pass: count occurrences.
+  int count = 0;
+  const char* pos = str->chars;
+  while ((pos = strstr(pos, search->chars)) != NULL) {
+    count++;
+    pos += search->length;
+  }
+
+  if (count == 0) {
+    *result = receiver;
+    return true;
+  }
+
+  // Compute new length and allocate.
+  int newLen = str->length + count * (repl->length - search->length);
+  char* buffer = ALLOCATE(char, newLen + 1);
+
+  // Second pass: build result.
+  const char* src = str->chars;
+  char* dst = buffer;
+  while ((pos = strstr(src, search->chars)) != NULL) {
+    int segLen = (int)(pos - src);
+    memcpy(dst, src, segLen);
+    dst += segLen;
+    memcpy(dst, repl->chars, repl->length);
+    dst += repl->length;
+    src = pos + search->length;
+  }
+  // Copy remainder.
+  int remaining = (int)(str->chars + str->length - src);
+  memcpy(dst, src, remaining);
+  dst[remaining] = '\0';
+
+  *result = OBJ_VAL(takeString(buffer, newLen));
+  return true;
+}
+
+static bool stringStartsWith(Value receiver, int argCount, Value* args,
+                              Value* result) {
+  ObjString* str = AS_STRING(receiver);
+  if (!IS_STRING(args[0])) {
+    runtimeError("startsWith argument must be a string.");
+    return false;
+  }
+  ObjString* prefix = AS_STRING(args[0]);
+  if (prefix->length > str->length) {
+    *result = BOOL_VAL(false);
+    return true;
+  }
+  *result = BOOL_VAL(memcmp(str->chars, prefix->chars, prefix->length) == 0);
+  return true;
+}
+
+static bool stringEndsWith(Value receiver, int argCount, Value* args,
+                            Value* result) {
+  ObjString* str = AS_STRING(receiver);
+  if (!IS_STRING(args[0])) {
+    runtimeError("endsWith argument must be a string.");
+    return false;
+  }
+  ObjString* suffix = AS_STRING(args[0]);
+  if (suffix->length > str->length) {
+    *result = BOOL_VAL(false);
+    return true;
+  }
+  *result = BOOL_VAL(memcmp(str->chars + str->length - suffix->length,
+                            suffix->chars, suffix->length) == 0);
+  return true;
+}
+
+static bool stringContains(Value receiver, int argCount, Value* args,
+                            Value* result) {
+  ObjString* str = AS_STRING(receiver);
+  if (!IS_STRING(args[0])) {
+    runtimeError("contains argument must be a string.");
+    return false;
+  }
+  ObjString* search = AS_STRING(args[0]);
+  *result = BOOL_VAL(strstr(str->chars, search->chars) != NULL);
+  return true;
+}
+
+static bool stringRepeat(Value receiver, int argCount, Value* args,
+                          Value* result) {
+  ObjString* str = AS_STRING(receiver);
+  if (!IS_NUMBER(args[0])) {
+    runtimeError("repeat argument must be a number.");
+    return false;
+  }
+  int n = (int)AS_NUMBER(args[0]);
+  if (n < 0) {
+    runtimeError("repeat count must be non-negative.");
+    return false;
+  }
+  if (n == 0 || str->length == 0) {
+    *result = OBJ_VAL(copyString("", 0));
+    return true;
+  }
+
+  int len = str->length;
+  int newLen = len * n;
+  char* buffer = ALLOCATE(char, newLen + 1);
+  for (int i = 0; i < n; i++) {
+    memcpy(buffer + i * len, str->chars, len);
+  }
+  buffer[newLen] = '\0';
+  *result = OBJ_VAL(takeString(buffer, newLen));
+  return true;
+}
+
+static bool stringCharAt(Value receiver, int argCount, Value* args,
+                          Value* result) {
+  ObjString* str = AS_STRING(receiver);
+  if (!IS_NUMBER(args[0])) {
+    runtimeError("charAt argument must be a number.");
+    return false;
+  }
+  int index = (int)AS_NUMBER(args[0]);
+  if (index < 0 || index >= str->length) {
+    runtimeError("String index %d out of bounds [0, %d).",
+                 index, str->length);
+    return false;
+  }
+  *result = OBJ_VAL(copyString(str->chars + index, 1));
+  return true;
+}
+
 // --- Higher-order array methods ---
 
 static bool arrayMap(Value receiver, int argCount, Value* args,
@@ -793,32 +1101,34 @@ static bool arrayAny(Value receiver, int argCount, Value* args,
 
 // --- Native functions ---
 
-static Value typeNative(int argCount, Value* args) {
-  if (argCount == 0) return OBJ_VAL(copyString("nil", 3));
-  Value value = args[0];
-
-  if (IS_NIL(value))    return OBJ_VAL(copyString("nil", 3));
-  if (IS_BOOL(value))   return OBJ_VAL(copyString("bool", 4));
-  if (IS_NUMBER(value)) return OBJ_VAL(copyString("number", 6));
+ObjString* typeOfValue(Value value) {
+  if (IS_NIL(value))    return copyString("nil", 3);
+  if (IS_BOOL(value))   return copyString("bool", 4);
+  if (IS_NUMBER(value)) return copyString("number", 6);
 
   if (IS_OBJ(value)) {
     switch (OBJ_TYPE(value)) {
-      case OBJ_STRING:        return OBJ_VAL(copyString("string", 6));
-      case OBJ_ARRAY:         return OBJ_VAL(copyString("array", 5));
-      case OBJ_MAP:           return OBJ_VAL(copyString("map", 3));
-      case OBJ_CLASS:         return OBJ_VAL(copyString("class", 5));
-      case OBJ_FILE:          return OBJ_VAL(copyString("file", 4));
-      case OBJ_INSTANCE:      return OBJ_VAL(copyString("instance", 8));
-      case OBJ_MODULE:        return OBJ_VAL(copyString("module", 6));
+      case OBJ_STRING:        return copyString("string", 6);
+      case OBJ_ARRAY:         return copyString("array", 5);
+      case OBJ_MAP:           return copyString("map", 3);
+      case OBJ_CLASS:         return copyString("class", 5);
+      case OBJ_FILE:          return copyString("file", 4);
+      case OBJ_INSTANCE:      return copyString("instance", 8);
+      case OBJ_MODULE:        return copyString("module", 6);
       case OBJ_FUNCTION:
       case OBJ_CLOSURE:
       case OBJ_NATIVE:
       case OBJ_NATIVE_METHOD:
-      case OBJ_BOUND_METHOD:  return OBJ_VAL(copyString("function", 8));
+      case OBJ_BOUND_METHOD:  return copyString("function", 8);
       default: break;
     }
   }
-  return OBJ_VAL(copyString("unknown", 7));
+  return copyString("unknown", 7);
+}
+
+static Value typeNative(int argCount, Value* args) {
+  if (argCount == 0) return OBJ_VAL(typeOfValue(NIL_VAL));
+  return OBJ_VAL(typeOfValue(args[0]));
 }
 
 static Value sqrtNative(int argCount, Value* args) {
@@ -1189,10 +1499,15 @@ void registerBuiltins(void) {
   defineNativeMethod(vm.arrayMethods, "findIndex", arrayFindIndex, 1);
   defineNativeMethod(vm.arrayMethods, "all", arrayAll, 1);
   defineNativeMethod(vm.arrayMethods, "any", arrayAny, 1);
+  defineNativeMethod(vm.arrayMethods, "sort", arraySort, 0);
+  defineNativeMethod(vm.arrayMethods, "reverse", arrayReverse, 0);
+  defineNativeMethod(vm.arrayMethods, "join", arrayJoin, 1);
+  defineNativeMethod(vm.arrayMethods, "flat", arrayFlat, 0);
+  defineNativeMethod(vm.arrayMethods, "indexOf", arrayIndexOf, 1);
 
   vm.mapMethods = NULL;
   vm.mapMethods = newClass(copyString("Map", 3));
-  defineNativeMethod(vm.mapMethods, "has", mapHas, 1);
+  defineNativeMethod(vm.mapMethods, "containsKey", mapHas, 1);
   defineNativeMethod(vm.mapMethods, "keys", mapKeys, 0);
   defineNativeMethod(vm.mapMethods, "values", mapValues, 0);
   defineNativeMethod(vm.mapMethods, "remove", mapRemove, 1);
@@ -1219,6 +1534,12 @@ void registerBuiltins(void) {
   defineNativeMethod(vm.stringMethods, "toLower", stringToLower, 0);
   defineNativeMethod(vm.stringMethods, "split", stringSplit, 1);
   defineNativeMethod(vm.stringMethods, "trim", stringTrim, 0);
+  defineNativeMethod(vm.stringMethods, "replace", stringReplace, 2);
+  defineNativeMethod(vm.stringMethods, "startsWith", stringStartsWith, 1);
+  defineNativeMethod(vm.stringMethods, "endsWith", stringEndsWith, 1);
+  defineNativeMethod(vm.stringMethods, "contains", stringContains, 1);
+  defineNativeMethod(vm.stringMethods, "repeat", stringRepeat, 1);
+  defineNativeMethod(vm.stringMethods, "charAt", stringCharAt, 1);
 
   defineNative("type", typeNative);
 

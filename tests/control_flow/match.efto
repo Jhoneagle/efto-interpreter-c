@@ -1,0 +1,113 @@
+// Literal matching with numbers.
+match (42) {
+  1 => print "one";
+  42 => print "forty-two";
+  _ => print "other";
+}
+// expect: forty-two
+
+// Boolean and nil matching.
+match (true) {
+  false => print "nope";
+  true => print "yes";
+}
+// expect: yes
+
+match (nil) {
+  nil => print "nothing";
+  _ => print "something";
+}
+// expect: nothing
+
+// Wildcard.
+match (99) {
+  _ => print "anything";
+}
+// expect: anything
+
+// No match.
+match (100) {
+  1 => print "one";
+  2 => print "two";
+}
+
+// Block bodies.
+match (2) {
+  1 => { print "one"; }
+  2 => {
+    var msg = "two";
+    print msg;
+  }
+  _ => print "other";
+}
+// expect: two
+
+// Array destructuring.
+var point = [3, 4];
+match (point) {
+  [x, y] => {
+    print x;
+    print y;
+  }
+  _ => print "not a point";
+}
+// expect: 3
+// expect: 4
+
+// Array wrong length.
+match ([1, 2, 3]) {
+  [a, b] => print "pair";
+  _ => print "not a pair";
+}
+// expect: not a pair
+
+// Array on non-array.
+match ("not an array") {
+  [x] => print "array";
+  _ => print "not array";
+}
+// expect: not array
+
+// Map single key.
+var m1 = {"x": 10};
+match (m1) {
+  {x} => print x;
+  _ => print "no match";
+}
+// expect: 10
+
+// Map two keys.
+var person = {"name": "Alice", "age": 30};
+match (person) {
+  {name, age} => {
+    print name;
+    print age;
+  }
+  _ => print "no match";
+}
+// expect: Alice
+// expect: 30
+
+// Map renaming.
+var data = {"x": 10, "y": 20};
+match (data) {
+  {x: a, y: b} => print a + b;
+  _ => print "no match";
+}
+// expect: 30
+
+// Map on non-map.
+match (42) {
+  {x} => print "map";
+  _ => print "not a map";
+}
+// expect: not a map
+
+// Map missing key.
+var partial = {"name": "Bob"};
+match (partial) {
+  {name, age} => print "has both";
+  {name} => print name;
+  _ => print "no match";
+}
+// expect: Bob

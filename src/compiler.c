@@ -550,6 +550,11 @@ static void unary(bool canAssign) {
   }
 }
 
+static void typeof_(bool canAssign) {
+  parsePrecedence(PREC_UNARY);
+  emitByte(OP_TYPEOF);
+}
+
 static void and_(bool canAssign) {
   int endJump = emitJump(OP_JUMP_IF_FALSE);
 
@@ -585,21 +590,43 @@ static void ternary(bool canAssign) {
   patchJump(elseJump);
 }
 
+#define ARG_SPREAD_SENTINEL 255
+
 static uint8_t argumentList() {
   uint8_t argCount = 0;
+  bool hasSpread = false;
 
   if (!check(TOKEN_RIGHT_PAREN)) {
     do {
-      expression();
-      if (argCount == 255) {
-        error("Can't have more than 255 arguments.");
+      if (check(TOKEN_DOT_DOT_DOT)) {
+        if (!hasSpread) {
+          // Package args so far into an array.
+          emitBytes(OP_BUILD_ARRAY, argCount);
+          argCount = 0;
+          hasSpread = true;
+        }
+        advance(); // consume ...
+        expression();
+        emitByte(OP_SPREAD_ARRAY);
+      } else {
+        expression();
+        if (hasSpread) {
+          emitByte(OP_ARRAY_APPEND);
+        } else {
+          if (argCount == 254) {
+            error("Can't have more than 254 arguments.");
+          }
+          argCount++;
+        }
       }
-      argCount++;
     } while (match(TOKEN_COMMA));
   }
 
   consume(TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
 
+  if (hasSpread) {
+    return ARG_SPREAD_SENTINEL;
+  }
   return argCount;
 }
 
@@ -620,8 +647,12 @@ static void dot(bool canAssign) {
     emitBytes(OP_SET_PROPERTY, name);
   } else if (match(TOKEN_LEFT_PAREN)) {
     uint8_t argCount = argumentList();
-    emitBytes(OP_INVOKE, name);
-    emitByte(argCount);
+    if (argCount == ARG_SPREAD_SENTINEL) {
+      emitBytes(OP_INVOKE_SPREAD, name);
+    } else {
+      emitBytes(OP_INVOKE, name);
+      emitByte(argCount);
+    }
   } else {
     emitBytes(OP_GET_PROPERTY, name);
   }
@@ -653,24 +684,47 @@ static void super_(bool canAssign) {
 
 static void call(bool canAssign) {
   uint8_t argCount = argumentList();
-  emitBytes(OP_CALL, argCount);
+  if (argCount == ARG_SPREAD_SENTINEL) {
+    emitByte(OP_CALL_SPREAD);
+  } else {
+    emitBytes(OP_CALL, argCount);
+  }
 }
 
 static void arrayLiteral(bool canAssign) {
   uint8_t elementCount = 0;
+  bool hasSpread = false;
 
   if (!check(TOKEN_RIGHT_BRACKET)) {
     do {
-      expression();
-      if (elementCount == 255) {
-        error("Can't have more than 255 elements in an array literal.");
+      if (check(TOKEN_DOT_DOT_DOT)) {
+        if (!hasSpread) {
+          // Package elements compiled so far into an array.
+          emitBytes(OP_BUILD_ARRAY, elementCount);
+          elementCount = 0;
+          hasSpread = true;
+        }
+        advance(); // consume ...
+        expression();
+        emitByte(OP_SPREAD_ARRAY);
+      } else {
+        expression();
+        if (hasSpread) {
+          emitByte(OP_ARRAY_APPEND);
+        } else {
+          if (elementCount == 255) {
+            error("Can't have more than 255 elements in an array literal.");
+          }
+          elementCount++;
+        }
       }
-      elementCount++;
     } while (match(TOKEN_COMMA));
   }
 
   consume(TOKEN_RIGHT_BRACKET, "Expect ']' after array elements.");
-  emitBytes(OP_BUILD_ARRAY, elementCount);
+  if (!hasSpread) {
+    emitBytes(OP_BUILD_ARRAY, elementCount);
+  }
 }
 
 static void mapLiteral(bool canAssign) {
@@ -774,6 +828,9 @@ ParseRule rules[] = {
   [TOKEN_CATCH]         = {NULL,     NULL,   PREC_NONE},
   [TOKEN_THROW]         = {NULL,     NULL,   PREC_NONE},
   [TOKEN_FINALLY]       = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_TYPEOF]        = {typeof_,  NULL,   PREC_NONE},
+  [TOKEN_MATCH]         = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_DOT_DOT_DOT]  = {NULL,     NULL,   PREC_NONE},
   [TOKEN_QUESTION]      = {NULL,     ternary, PREC_TERNARY},
   [TOKEN_COLON]         = {NULL,     NULL,   PREC_NONE},
   [TOKEN_LEFT_BRACKET]  = {arrayLiteral, subscript, PREC_CALL},
@@ -886,6 +943,19 @@ void parseParameterList() {
   bool hasDefault = false;
   if (!check(TOKEN_RIGHT_PAREN)) {
     do {
+      // Rest parameter: ...name
+      if (match(TOKEN_DOT_DOT_DOT)) {
+        current->function->hasRest = true;
+        current->function->arity++;
+        if (current->function->arity > 255) {
+          errorAtCurrent("Can't have more than 255 parameters.");
+        }
+        uint8_t constant = parseVariable("Expect rest parameter name.");
+        defineVariable(constant);
+        // Rest must be last parameter.
+        break;
+      }
+
       current->function->arity++;
       if (current->function->arity > 255) {
         errorAtCurrent("Can't have more than 255 parameters.");
@@ -920,7 +990,12 @@ void parseParameterList() {
       }
     } while (match(TOKEN_COMMA));
   }
-  if (!hasDefault) {
+
+  if (current->function->hasRest) {
+    if (!hasDefault) {
+      current->function->minArity = current->function->arity - 1;
+    }
+  } else if (!hasDefault) {
     current->function->minArity = current->function->arity;
   }
 }

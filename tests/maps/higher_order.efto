@@ -18,17 +18,17 @@ print total; // expect: 6
 
 // map — double all values.
 var doubled = m.map((k, v) => v * 2);
-print doubled.has("a"); // expect: true
-print doubled.has("b"); // expect: true
-print doubled.has("c"); // expect: true
+print doubled.containsKey("a"); // expect: true
+print doubled.containsKey("b"); // expect: true
+print doubled.containsKey("c"); // expect: true
 print doubled.size; // expect: 3
 
 // filter — keep values > 1.
 var big = m.filter((k, v) => v > 1);
 print big.size; // expect: 2
-print big.has("a"); // expect: false
-print big.has("b"); // expect: true
-print big.has("c"); // expect: true
+print big.containsKey("a"); // expect: false
+print big.containsKey("b"); // expect: true
+print big.containsKey("c"); // expect: true
 
 // reduce with initial value.
 var sum = m.reduce((acc, k, v) => acc + v, 0);

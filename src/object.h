@@ -84,6 +84,7 @@ typedef struct {
   int arity;
   int minArity;
   int upvalueCount;
+  bool hasRest;
   Chunk chunk;
   ObjString* name;
 } ObjFunction;

@@ -16,7 +16,7 @@
 VM vm;
 
 static void closeUpvalues(Value* last);
-static ObjString* stringify(Value value);
+ObjString* stringify(Value value);
 static InterpretResult run(int baseFrame);
 
 // Builtin functions and methods are in builtins.c.
@@ -90,7 +90,7 @@ static bool throwException(Value value) {
   return false;
 }
 
-static ObjString* stringify(Value value) {
+ObjString* stringify(Value value) {
   if (IS_STRING(value)) return AS_STRING(value);
 
   if (IS_NIL(value)) return copyString("nil", 3);
@@ -253,17 +253,50 @@ static Value peek(int distance) {
 }
 
 static bool call(ObjClosure* closure, int argCount) {
-  if (argCount < closure->function->minArity ||
-      argCount > closure->function->arity) {
-    if (closure->function->minArity == closure->function->arity) {
-      runtimeError("Expected %d arguments but got %d.",
-          closure->function->arity, argCount);
-    } else {
-      runtimeError("Expected %d to %d arguments but got %d.",
-          closure->function->minArity, closure->function->arity,
-          argCount);
+  bool hasRest = closure->function->hasRest;
+  int arity = closure->function->arity;
+  int minArity = closure->function->minArity;
+
+  if (hasRest) {
+    // Rest functions accept minArity or more arguments.
+    if (argCount < minArity) {
+      runtimeError("Expected at least %d arguments but got %d.",
+          minArity, argCount);
+      return false;
     }
-    return false;
+
+    // Collect excess args into a rest array.
+    int restStart = arity - 1; // index of rest parameter
+    int restCount = (argCount > restStart) ? argCount - restStart : 0;
+
+    ObjArray* restArray = newArray();
+    push(OBJ_VAL(restArray)); // GC protect
+
+    // Copy rest args into the array. They are below our GC-protection push.
+    // Stack: [..., callee, arg0, ..., argN-1, restArray]
+    // Rest args start at index restStart within args.
+    for (int i = 0; i < restCount; i++) {
+      writeValueArray(&restArray->elements,
+                      vm.stackTop[-1 - argCount + restStart + i]);
+    }
+
+    pop(); // remove GC protection
+
+    // Remove restCount values and push the rest array in their place.
+    vm.stackTop -= restCount;
+    push(OBJ_VAL(restArray));
+    argCount = arity;
+  } else {
+    if (argCount < minArity || argCount > arity) {
+      if (minArity == arity) {
+        runtimeError("Expected %d arguments but got %d.",
+            arity, argCount);
+      } else {
+        runtimeError("Expected %d to %d arguments but got %d.",
+            minArity, arity, argCount);
+      }
+      return false;
+    }
   }
 
   if (vm.frameCount == FRAMES_MAX) {
@@ -272,14 +305,14 @@ static bool call(ObjClosure* closure, int argCount) {
   }
 
   // Pad missing optional args with nil.
-  for (int i = argCount; i < closure->function->arity; i++) {
+  for (int i = argCount; i < arity; i++) {
     push(NIL_VAL);
   }
 
   CallFrame* frame = &vm.frames[vm.frameCount++];
   frame->closure = closure;
   frame->ip = closure->function->chunk.code;
-  frame->slots = vm.stackTop - closure->function->arity - 1;
+  frame->slots = vm.stackTop - arity - 1;
   frame->argCount = argCount;
   return true;
 }
@@ -929,6 +962,11 @@ static InterpretResult run(int baseFrame) {
         }
         push(NUMBER_VAL(-AS_NUMBER(pop())));
         break;
+      case OP_TYPEOF: {
+        Value value = pop();
+        push(OBJ_VAL(typeOfValue(value)));
+        break;
+      }
       case OP_PRINT: {
         printValue(pop());
         printf("\n");
@@ -960,6 +998,43 @@ static InterpretResult run(int baseFrame) {
       case OP_INVOKE: {
         ObjString* method = READ_STRING();
         int argCount = READ_BYTE();
+        if (!invoke(method, argCount)) {
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        frame = &vm.frames[vm.frameCount - 1];
+        break;
+      }
+      case OP_CALL_SPREAD: {
+        // Stack: [callee, argsArray]
+        Value argsVal = pop();
+        if (!IS_ARRAY(argsVal)) {
+          runtimeError("Spread call requires an array.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        ObjArray* argsArr = AS_ARRAY(argsVal);
+        int argCount = argsArr->elements.count;
+        for (int i = 0; i < argCount; i++) {
+          push(argsArr->elements.values[i]);
+        }
+        if (!callValue(peek(argCount), argCount)) {
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        frame = &vm.frames[vm.frameCount - 1];
+        break;
+      }
+      case OP_INVOKE_SPREAD: {
+        ObjString* method = READ_STRING();
+        // Stack: [receiver, argsArray]
+        Value argsVal = pop();
+        if (!IS_ARRAY(argsVal)) {
+          runtimeError("Spread invoke requires an array.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        ObjArray* argsArr = AS_ARRAY(argsVal);
+        int argCount = argsArr->elements.count;
+        for (int i = 0; i < argCount; i++) {
+          push(argsArr->elements.values[i]);
+        }
         if (!invoke(method, argCount)) {
           return INTERPRET_RUNTIME_ERROR;
         }
@@ -1006,6 +1081,25 @@ static InterpretResult run(int baseFrame) {
         // Move elements out from under the array.
         vm.stackTop[-1 - elementCount] = OBJ_VAL(array);
         vm.stackTop -= elementCount;
+        break;
+      }
+      case OP_ARRAY_APPEND: {
+        Value val = pop();
+        ObjArray* arr = AS_ARRAY(peek(0));
+        writeValueArray(&arr->elements, val);
+        break;
+      }
+      case OP_SPREAD_ARRAY: {
+        Value source = pop();
+        if (!IS_ARRAY(source)) {
+          runtimeError("Spread operator requires an array.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        ObjArray* src = AS_ARRAY(source);
+        ObjArray* dest = AS_ARRAY(peek(0));
+        for (int i = 0; i < src->elements.count; i++) {
+          writeValueArray(&dest->elements, src->elements.values[i]);
+        }
         break;
       }
       case OP_INDEX_GET: {

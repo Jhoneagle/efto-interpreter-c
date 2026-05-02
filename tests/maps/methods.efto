@@ -1,11 +1,11 @@
-// has
+// containsKey
 var m = {"a": 1, "b": 2};
-print m.has("a"); // expect: true
-print m.has("c"); // expect: false
+print m.containsKey("a"); // expect: true
+print m.containsKey("c"); // expect: false
 
 // remove
 m.remove("a");
-print m.has("a"); // expect: false
+print m.containsKey("a"); // expect: false
 print m.size; // expect: 1
 
 // keys returns an array with correct length

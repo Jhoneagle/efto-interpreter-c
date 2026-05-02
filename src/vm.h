@@ -85,5 +85,6 @@ void runtimeError(const char* format, ...);
 bool vmCallValue(Value callee, int argCount, Value* result);
 int getCallableArity(Value callee);
 bool callValue(Value callee, int argCount);
+ObjString* stringify(Value value);
 
 #endif

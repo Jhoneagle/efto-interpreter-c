@@ -1,0 +1,30 @@
+// typeof operator on primitives.
+print typeof 42;        // expect: number
+print typeof 3.14;      // expect: number
+print typeof "hello";   // expect: string
+print typeof true;      // expect: bool
+print typeof false;     // expect: bool
+print typeof nil;       // expect: nil
+
+// typeof on collections.
+print typeof [1, 2, 3]; // expect: array
+print typeof {};         // expect: map
+
+// typeof on functions.
+fun foo() {}
+print typeof foo;       // expect: function
+
+// typeof on classes and instances.
+class Dog {}
+print typeof Dog;       // expect: class
+var d = Dog();
+print typeof d;         // expect: instance
+
+// typeof in expressions.
+var t = typeof 42;
+print t;                // expect: number
+print typeof t;         // expect: string
+
+// typeof with complex expression.
+print typeof (1 + 2);   // expect: number
+print typeof [].length;  // expect: number

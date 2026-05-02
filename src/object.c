@@ -90,6 +90,7 @@ ObjFunction* newFunction() {
   function->arity = 0;
   function->minArity = 0;
   function->upvalueCount = 0;
+  function->hasRest = false;
   function->name = NULL;
   initChunk(&function->chunk);
   return function;

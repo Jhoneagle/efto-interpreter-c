@@ -1,0 +1,20 @@
+// Spread in function calls.
+fun sum(a, b, c) {
+  return a + b + c;
+}
+var args = [1, 2, 3];
+print sum(...args);  // expect: 6
+
+// Spread with regular args.
+fun add(a, b) {
+  return a + b;
+}
+var pair = [10, 20];
+print add(...pair);  // expect: 30
+
+// Spread with mixed args.
+fun greet(greeting, name) {
+  return greeting + " " + name;
+}
+var parts = ["hello", "world"];
+print greet(...parts);  // expect: hello world

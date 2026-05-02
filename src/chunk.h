@@ -58,6 +58,11 @@ typedef enum {
   OP_ENTER_FINALLY,
   OP_END_FINALLY,
   OP_NOP,
+  OP_TYPEOF,
+  OP_ARRAY_APPEND,
+  OP_SPREAD_ARRAY,
+  OP_CALL_SPREAD,
+  OP_INVOKE_SPREAD,
 } OpCode;
 
 typedef struct {

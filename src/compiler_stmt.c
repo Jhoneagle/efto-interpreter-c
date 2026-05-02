@@ -554,6 +554,195 @@ static void switchStatement() {
   endScope();
 }
 
+static bool isWildcardPattern() {
+  return check(TOKEN_IDENTIFIER) &&
+         parser.current.length == 1 &&
+         parser.current.start[0] == '_';
+}
+
+static void matchStatement() {
+  consume(TOKEN_LEFT_PAREN, "Expect '(' after 'match'.");
+
+  beginScope();
+  expression(); // scrutinee
+  consume(TOKEN_RIGHT_PAREN, "Expect ')' after match value.");
+  consume(TOKEN_LEFT_BRACE, "Expect '{' before match arms.");
+
+  // Store scrutinee as hidden local.
+  addLocal(syntheticToken(""));
+  markInitialized();
+  int scrutineeSlot = current->localCount - 1;
+
+  int armEnds[MAX_SWITCH_CASES];
+  int armCount = 0;
+  bool hasWildcard = false;
+
+  while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+    if (hasWildcard) {
+      error("Unreachable pattern after wildcard '_'.");
+    }
+
+    bool isWild = false;
+    bool hasBindingScope = false;
+    int skipJumps[MAX_DESTRUCTURE_VARS + 2];
+    int skipCount = 0;
+
+    if (isWildcardPattern()) {
+      // Wildcard pattern: always matches.
+      advance(); // consume _
+      isWild = true;
+    } else if (check(TOKEN_LEFT_BRACKET)) {
+      // Array destructuring pattern: [a, b, c]
+      advance(); // consume [
+
+      // Parse variable names.
+      Token names[MAX_DESTRUCTURE_VARS];
+      int nameCount = 0;
+      if (!check(TOKEN_RIGHT_BRACKET)) {
+        do {
+          consume(TOKEN_IDENTIFIER, "Expect variable name in array pattern.");
+          names[nameCount++] = parser.previous;
+          if (nameCount > MAX_DESTRUCTURE_VARS) {
+            error("Too many variables in array pattern.");
+          }
+        } while (match(TOKEN_COMMA));
+      }
+      consume(TOKEN_RIGHT_BRACKET, "Expect ']' after array pattern.");
+
+      // Type check: typeof scrutinee == "array"
+      emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+      emitByte(OP_TYPEOF);
+      emitConstant(OBJ_VAL(copyString("array", 5)));
+      emitByte(OP_EQUAL);
+      skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
+      emitByte(OP_POP); // pop true
+
+      // Length check: scrutinee.length == nameCount
+      emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+      Token lenTok = syntheticToken("length");
+      uint8_t lenConst = identifierConstant(&lenTok);
+      emitBytes(OP_GET_PROPERTY, lenConst);
+      emitConstant(NUMBER_VAL((double)nameCount));
+      emitByte(OP_EQUAL);
+      skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
+      emitByte(OP_POP); // pop true
+
+      // Bind variables in a new scope.
+      beginScope();
+      hasBindingScope = true;
+      for (int i = 0; i < nameCount; i++) {
+        emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+        emitConstant(NUMBER_VAL((double)i));
+        emitByte(OP_INDEX_GET);
+        addLocal(names[i]);
+        markInitialized();
+      }
+    } else if (check(TOKEN_LEFT_BRACE)) {
+      // Map destructuring pattern: {key: var} or {key}
+      advance(); // consume {
+
+      Token keys[MAX_DESTRUCTURE_VARS];
+      Token varNames[MAX_DESTRUCTURE_VARS];
+      int keyCount = 0;
+      if (!check(TOKEN_RIGHT_BRACE)) {
+        do {
+          consume(TOKEN_IDENTIFIER, "Expect key name in map pattern.");
+          keys[keyCount] = parser.previous;
+          if (match(TOKEN_COLON)) {
+            consume(TOKEN_IDENTIFIER, "Expect variable name after ':'.");
+            varNames[keyCount] = parser.previous;
+          } else {
+            varNames[keyCount] = keys[keyCount];
+          }
+          keyCount++;
+          if (keyCount > MAX_DESTRUCTURE_VARS) {
+            error("Too many keys in map pattern.");
+          }
+        } while (match(TOKEN_COMMA));
+      }
+      consume(TOKEN_RIGHT_BRACE, "Expect '}' after map pattern.");
+
+      // Type check: typeof scrutinee == "map"
+      emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+      emitByte(OP_TYPEOF);
+      emitConstant(OBJ_VAL(copyString("map", 3)));
+      emitByte(OP_EQUAL);
+      skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
+      emitByte(OP_POP); // pop true
+
+      // First: check all keys exist (before any bindings).
+      for (int i = 0; i < keyCount; i++) {
+        emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+        Token hasTok = syntheticToken("containsKey");
+        uint8_t hasConst = identifierConstant(&hasTok);
+        emitStringConstant(keys[i].start, keys[i].length);
+        emitBytes(OP_INVOKE, hasConst);
+        emitByte(1);
+        skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
+        emitByte(OP_POP); // pop true
+      }
+
+      // Then: bind all variables in a scope.
+      beginScope();
+      hasBindingScope = true;
+      for (int i = 0; i < keyCount; i++) {
+        emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+        emitStringConstant(keys[i].start, keys[i].length);
+        emitByte(OP_INDEX_GET);
+        addLocal(varNames[i]);
+        markInitialized();
+      }
+    } else {
+      // Literal pattern: number, string, true, false, nil.
+      emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+      expression();
+      emitByte(OP_EQUAL);
+      skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
+      emitByte(OP_POP); // pop true
+    }
+
+    // Consume => separator.
+    consume(TOKEN_ARROW, "Expect '=>' after match pattern.");
+
+    // Compile arm body.
+    statement();
+
+    // Close destructuring scope if we opened one.
+    if (hasBindingScope) {
+      endScope();
+    }
+
+    // End arm: jump to end of match.
+    if (armCount < MAX_SWITCH_CASES) {
+      armEnds[armCount++] = emitJump(OP_JUMP);
+    } else {
+      error("Too many arms in match statement.");
+    }
+
+    // Patch all skip jumps to the same target with a single POP.
+    // Only one comparison can fail per arm, leaving one false on stack.
+    if (skipCount > 0) {
+      for (int i = 0; i < skipCount; i++) {
+        patchJump(skipJumps[i]);
+      }
+      emitByte(OP_POP); // pop the single false value
+    }
+
+    if (isWild) {
+      hasWildcard = true;
+    }
+  }
+
+  consume(TOKEN_RIGHT_BRACE, "Expect '}' after match arms.");
+
+  // Patch all arm end jumps.
+  for (int i = 0; i < armCount; i++) {
+    patchJump(armEnds[i]);
+  }
+
+  endScope();
+}
+
 static void emitCleanupToScope(int targetDepth) {
   for (int i = current->localCount - 1; i >= 0; i--) {
     if (current->locals[i].depth != -1 &&
@@ -794,6 +983,7 @@ static void synchronize() {
       case TOKEN_IMPORT:
       case TOKEN_TRY:
       case TOKEN_THROW:
+      case TOKEN_MATCH:
         return;
 
       default:
@@ -947,6 +1137,8 @@ void statement() {
     tryStatement();
   } else if (match(TOKEN_THROW)) {
     throwStatement();
+  } else if (match(TOKEN_MATCH)) {
+    matchStatement();
   } else if (match(TOKEN_LEFT_BRACE)) {
     beginScope();
     block();

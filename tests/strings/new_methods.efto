@@ -1,0 +1,34 @@
+// replace method.
+print "hello world".replace("world", "efto");  // expect: hello efto
+print "aaa".replace("a", "bb");                 // expect: bbbbbb
+print "hello".replace("xyz", "abc");            // expect: hello
+print "hello".replace("", "x");                 // expect: hello
+
+// startsWith method.
+print "hello world".startsWith("hello");  // expect: true
+print "hello world".startsWith("world");  // expect: false
+print "hello".startsWith("");             // expect: true
+print "".startsWith("a");                 // expect: false
+
+// endsWith method.
+print "hello world".endsWith("world");  // expect: true
+print "hello world".endsWith("hello");  // expect: false
+print "hello".endsWith("");             // expect: true
+print "".endsWith("a");                 // expect: false
+
+// contains method.
+print "hello world".contains("lo wo");  // expect: true
+print "hello world".contains("xyz");    // expect: false
+print "hello".contains("");             // expect: true
+print "".contains("");                  // expect: true
+
+// repeat method.
+print "ab".repeat(3);   // expect: ababab
+print "x".repeat(1);    // expect: x
+print "hi".repeat(0);   // expect:
+print "".repeat(5);     // expect:
+
+// charAt method.
+print "hello".charAt(0);  // expect: h
+print "hello".charAt(4);  // expect: o
+print "abc".charAt(1);    // expect: b

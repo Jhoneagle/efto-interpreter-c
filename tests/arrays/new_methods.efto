@@ -1,0 +1,73 @@
+// sort method.
+var nums = [3, 1, 4, 1, 5, 9, 2, 6];
+nums.sort();
+print nums[0];  // expect: 1
+print nums[1];  // expect: 1
+print nums[2];  // expect: 2
+print nums[7];  // expect: 9
+
+var strs = ["banana", "apple", "cherry"];
+strs.sort();
+print strs[0];  // expect: apple
+print strs[1];  // expect: banana
+print strs[2];  // expect: cherry
+
+// Sort with mixed primitive types: nil < bool < number < string.
+var mixed = ["z", 3, nil, true, false, 1, "a"];
+mixed.sort();
+print mixed[0];  // expect: nil
+print mixed[1];  // expect: false
+print mixed[2];  // expect: true
+print mixed[3];  // expect: 1
+print mixed[4];  // expect: 3
+print mixed[5];  // expect: a
+print mixed[6];  // expect: z
+
+// Empty array sort.
+var empty = [];
+empty.sort();
+print empty.length;  // expect: 0
+
+// reverse method.
+var arr = [1, 2, 3, 4, 5];
+arr.reverse();
+print arr[0];  // expect: 5
+print arr[4];  // expect: 1
+
+var odd = [1, 2, 3];
+odd.reverse();
+print odd[0];  // expect: 3
+print odd[2];  // expect: 1
+
+// join method.
+print [1, 2, 3].join(", ");       // expect: 1, 2, 3
+print ["a", "b", "c"].join("-");   // expect: a-b-c
+print [].join(",");                // expect:
+print ["only"].join(",");          // expect: only
+print [1, true, nil].join(" ");    // expect: 1 true nil
+
+// flat method.
+var nested = [[1, 2], [3, 4], [5]];
+var f = nested.flat();
+print f.length;  // expect: 5
+print f[0];      // expect: 1
+print f[4];      // expect: 5
+
+var mixed2 = [1, [2, 3], 4, [5]];
+var f2 = mixed2.flat();
+print f2.length;  // expect: 5
+print f2[0];      // expect: 1
+print f2[1];      // expect: 2
+
+// flat only goes one level deep.
+var deep = [[1, [2, 3]], [4]];
+var f3 = deep.flat();
+print f3.length;  // expect: 3
+print f3[0];      // expect: 1
+print type(f3[1]);  // expect: array
+
+// indexOf method.
+print [10, 20, 30].indexOf(20);   // expect: 1
+print [10, 20, 30].indexOf(99);   // expect: -1
+print ["a", "b", "c"].indexOf("b");  // expect: 1
+print [].indexOf(1);               // expect: -1

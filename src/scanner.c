@@ -179,6 +179,7 @@ static TokenType identifierType() {
         }
       }
       break;
+    case 'm': return checkKeyword(1, 4, "atch", TOKEN_MATCH);
     case 'n': return checkKeyword(1, 2, "il", TOKEN_NIL);
     case 'o': return checkKeyword(1, 1, "r", TOKEN_OR);
     case 'p': return checkKeyword(1, 4, "rint", TOKEN_PRINT);
@@ -210,6 +211,7 @@ static TokenType identifierType() {
               }
             }
             break;
+          case 'y': return checkKeyword(2, 4, "peof", TOKEN_TYPEOF);
         }
       }
       break;
@@ -336,7 +338,12 @@ Token scanToken() {
     case '?': return makeToken(TOKEN_QUESTION);
     case '[': return makeToken(TOKEN_LEFT_BRACKET);
     case ']': return makeToken(TOKEN_RIGHT_BRACKET);
-    case '.': return makeToken(TOKEN_DOT);
+    case '.':
+      if (peek() == '.' && peekNext() == '.') {
+        advance(); advance();
+        return makeToken(TOKEN_DOT_DOT_DOT);
+      }
+      return makeToken(TOKEN_DOT);
     case '-':
       return makeToken(
           match('=') ? TOKEN_MINUS_EQUAL : TOKEN_MINUS);
