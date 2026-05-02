@@ -16,6 +16,7 @@ typedef enum {
   TOKEN_PLUS_EQUAL, TOKEN_MINUS_EQUAL,
   TOKEN_STAR_EQUAL, TOKEN_SLASH_EQUAL,
   TOKEN_PERCENT_EQUAL,
+  TOKEN_ARROW,
   // Literals.
   TOKEN_IDENTIFIER, TOKEN_STRING, TOKEN_NUMBER,
   TOKEN_INTERPOLATION,
@@ -41,7 +42,17 @@ typedef struct {
   int line;
 } Token;
 
+typedef struct {
+  const char* start;
+  const char* current;
+  int line;
+  int interpolationDepth;
+  int numBraces[8];
+} ScannerState;
+
 void initScanner(const char* source);
 Token scanToken();
+ScannerState saveScannerState();
+void restoreScannerState(ScannerState state);
 
 #endif

@@ -1,0 +1,53 @@
+// Default parameter values.
+
+// Basic defaults.
+fun greet(name, greeting = "Hello") {
+  print greeting + ", " + name;
+}
+greet("Alice");          // expect: Hello, Alice
+greet("Bob", "Hey");     // expect: Hey, Bob
+
+// Multiple defaults.
+fun make(x, y = 10, z = 20) {
+  print x + y + z;
+}
+make(1);          // expect: 31
+make(1, 2);       // expect: 23
+make(1, 2, 3);    // expect: 6
+
+// Default referencing earlier param.
+fun pair(a, b = a) {
+  print a;
+  print b;
+}
+pair(5);
+// expect: 5
+// expect: 5
+pair(5, 9);
+// expect: 5
+// expect: 9
+
+// Expression defaults.
+fun calc(x, y = x * 2 + 1) {
+  print y;
+}
+calc(3);     // expect: 7
+calc(3, 0);  // expect: 0
+
+// All params have defaults.
+fun optional(a = 1, b = 2) {
+  print a + b;
+}
+optional();       // expect: 3
+optional(10);     // expect: 12
+optional(10, 20); // expect: 30
+
+// Default with method.
+class Greeter {
+  greet(name = "world") {
+    print "Hi, " + name;
+  }
+}
+var g = Greeter();
+g.greet();         // expect: Hi, world
+g.greet("efto");   // expect: Hi, efto

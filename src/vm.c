@@ -511,9 +511,16 @@ static Value peek(int distance) {
 }
 
 static bool call(ObjClosure* closure, int argCount) {
-  if (argCount != closure->function->arity) {
-    runtimeError("Expected %d arguments but got %d.",
-        closure->function->arity, argCount);
+  if (argCount < closure->function->minArity ||
+      argCount > closure->function->arity) {
+    if (closure->function->minArity == closure->function->arity) {
+      runtimeError("Expected %d arguments but got %d.",
+          closure->function->arity, argCount);
+    } else {
+      runtimeError("Expected %d to %d arguments but got %d.",
+          closure->function->minArity, closure->function->arity,
+          argCount);
+    }
     return false;
   }
 
@@ -522,10 +529,16 @@ static bool call(ObjClosure* closure, int argCount) {
     return false;
   }
 
+  // Pad missing optional args with nil.
+  for (int i = argCount; i < closure->function->arity; i++) {
+    push(NIL_VAL);
+  }
+
   CallFrame* frame = &vm.frames[vm.frameCount++];
   frame->closure = closure;
   frame->ip = closure->function->chunk.code;
-  frame->slots = vm.stackTop - argCount - 1;
+  frame->slots = vm.stackTop - closure->function->arity - 1;
+  frame->argCount = argCount;
   return true;
 }
 
@@ -1301,6 +1314,15 @@ static InterpretResult run(int baseFrame) {
           return INTERPRET_RUNTIME_ERROR;
         }
         frame = &vm.frames[vm.frameCount - 1];
+        break;
+      }
+      case OP_DEFAULT_ARG: {
+        uint8_t slot = READ_BYTE();
+        uint16_t jump = READ_SHORT();
+        if (frame->argCount > slot) {
+          // Argument was provided, skip the default expression.
+          frame->ip += jump;
+        }
         break;
       }
     }

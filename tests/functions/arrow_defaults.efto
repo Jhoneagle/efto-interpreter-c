@@ -1,0 +1,18 @@
+// Arrow functions with default parameters.
+
+var greet = (name, greeting = "Hi") => greeting + ", " + name;
+print greet("Alice");        // expect: Hi, Alice
+print greet("Bob", "Hey");   // expect: Hey, Bob
+
+// Arrow block body with defaults.
+var calc = (x, factor = 2) => {
+  return x * factor;
+};
+print calc(5);     // expect: 10
+print calc(5, 3);  // expect: 15
+
+// All defaults.
+var defaults = (a = 1, b = 2) => a + b;
+print defaults();       // expect: 3
+print defaults(10);     // expect: 12
+print defaults(10, 20); // expect: 30

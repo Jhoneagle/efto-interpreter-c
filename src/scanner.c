@@ -354,6 +354,7 @@ Token scanToken() {
       return makeToken(
           match('=') ? TOKEN_BANG_EQUAL : TOKEN_BANG);
     case '=':
+      if (match('>')) return makeToken(TOKEN_ARROW);
       return makeToken(
           match('=') ? TOKEN_EQUAL_EQUAL : TOKEN_EQUAL);
     case '<':
@@ -366,4 +367,26 @@ Token scanToken() {
   }
 
   return errorToken("Unexpected character.");
+}
+
+ScannerState saveScannerState() {
+  ScannerState state;
+  state.start = scanner.start;
+  state.current = scanner.current;
+  state.line = scanner.line;
+  state.interpolationDepth = scanner.interpolationDepth;
+  for (int i = 0; i < MAX_INTERPOLATION_NESTING; i++) {
+    state.numBraces[i] = scanner.numBraces[i];
+  }
+  return state;
+}
+
+void restoreScannerState(ScannerState state) {
+  scanner.start = state.start;
+  scanner.current = state.current;
+  scanner.line = state.line;
+  scanner.interpolationDepth = state.interpolationDepth;
+  for (int i = 0; i < MAX_INTERPOLATION_NESTING; i++) {
+    scanner.numBraces[i] = state.numBraces[i];
+  }
 }

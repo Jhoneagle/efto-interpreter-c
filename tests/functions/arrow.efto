@@ -1,0 +1,46 @@
+// Arrow function lambdas.
+
+// Expression body.
+var double = (x) => x * 2;
+print double(5); // expect: 10
+
+// Block body.
+var add = (a, b) => {
+  return a + b;
+};
+print add(3, 4); // expect: 7
+
+// No params.
+var hi = () => "hello";
+print hi(); // expect: hello
+
+// Passed as argument.
+fun apply(f, x) {
+  return f(x);
+}
+print apply((x) => x * x, 6); // expect: 36
+
+// Closure capture.
+var base = 100;
+var offset = (x) => x + base;
+print offset(5); // expect: 105
+
+// Arrow returning arrow.
+var adder = (a) => {
+  return (b) => a + b;
+};
+var add5 = adder(5);
+print add5(3); // expect: 8
+
+// Arrow with block body, no return (implicit nil).
+var side = (x) => {
+  print x;
+};
+side("effect"); // expect: effect
+
+// Multiple params expression body.
+var sum3 = (a, b, c) => a + b + c;
+print sum3(1, 2, 3); // expect: 6
+
+// Immediately invoked.
+print ((x) => x + 1)(10); // expect: 11

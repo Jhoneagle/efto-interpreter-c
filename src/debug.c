@@ -175,6 +175,14 @@ int disassembleInstruction(Chunk* chunk, int offset) {
       return simpleInstruction("OP_END_TRY", offset);
     case OP_THROW:
       return simpleInstruction("OP_THROW", offset);
+    case OP_DEFAULT_ARG: {
+      uint8_t slot = chunk->code[offset + 1];
+      uint16_t jump = (uint16_t)(chunk->code[offset + 2] << 8);
+      jump |= chunk->code[offset + 3];
+      printf("%-16s %4d -> %d\n", "OP_DEFAULT_ARG", slot,
+             offset + 4 + jump);
+      return offset + 4;
+    }
     default:
       printf("Unknown opcode %d\n", instruction);
       return offset + 1;

@@ -69,6 +69,7 @@ typedef struct {
 typedef struct {
   Obj obj;
   int arity;
+  int minArity;
   int upvalueCount;
   Chunk chunk;
   ObjString* name;

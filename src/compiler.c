@@ -55,7 +55,8 @@ typedef enum {
   TYPE_FUNCTION,
   TYPE_INITIALIZER,
   TYPE_METHOD,
-  TYPE_SCRIPT
+  TYPE_SCRIPT,
+  TYPE_ARROW
 } FunctionType;
 
 typedef struct Compiler {
@@ -221,7 +222,7 @@ static void initCompiler(Compiler* compiler, FunctionType type) {
   compiler->function = newFunction();
   current = compiler;
 
-  if (type != TYPE_SCRIPT) {
+  if (type != TYPE_SCRIPT && type != TYPE_ARROW) {
     current->function->name = copyString(parser.previous.start,
                                          parser.previous.length);
   }
@@ -230,7 +231,7 @@ static void initCompiler(Compiler* compiler, FunctionType type) {
   local->depth = 0;
   local->isCaptured = false;
 
-  if (type != TYPE_FUNCTION) {
+  if (type != TYPE_FUNCTION && type != TYPE_ARROW) {
     local->name.start = "this";
     local->name.length = 4;
   } else {
@@ -278,6 +279,7 @@ static void endScope() {
 static void expression();
 static void statement();
 static void declaration();
+static void block();
 static ParseRule* getRule(TokenType type);
 static void parsePrecedence(Precedence precedence);
 
@@ -342,7 +344,95 @@ static void literal(bool canAssign) {
   }
 }
 
-static void grouping(bool canAssign) {
+static void parseParameterList();
+
+static bool checkForArrow() {
+  // Save scanner state; parser.current/previous are untouched.
+  ScannerState saved = saveScannerState();
+
+  // depth starts at 1 for the '(' in parser.previous.
+  // We must account for parser.current before scanning further,
+  // since the scanner is already positioned AFTER parser.current.
+  int depth = 1;
+
+  // Include parser.current in the depth count.
+  if (parser.current.type == TOKEN_LEFT_PAREN) depth++;
+  else if (parser.current.type == TOKEN_RIGHT_PAREN) {
+    depth--;
+    if (depth == 0) {
+      Token tok = scanToken();
+      bool isArrow = (tok.type == TOKEN_ARROW);
+      restoreScannerState(saved);
+      return isArrow;
+    }
+  }
+
+  // Scan ahead counting paren depth to find matching ')'.
+  Token tok;
+  for (;;) {
+    tok = scanToken();
+    if (tok.type == TOKEN_LEFT_PAREN) depth++;
+    else if (tok.type == TOKEN_RIGHT_PAREN) {
+      depth--;
+      if (depth == 0) break;
+    }
+    else if (tok.type == TOKEN_EOF) {
+      restoreScannerState(saved);
+      return false;
+    }
+  }
+
+  // Check if next token after ')' is '=>'.
+  tok = scanToken();
+  bool isArrow = (tok.type == TOKEN_ARROW);
+
+  restoreScannerState(saved);
+  return isArrow;
+}
+
+static void arrowFunction() {
+  // parser.previous is '('. parser.current is first token inside parens.
+  Compiler compiler;
+  initCompiler(&compiler, TYPE_ARROW);
+  beginScope();
+
+  parseParameterList();
+
+  consume(TOKEN_RIGHT_PAREN, "Expect ')' after parameters.");
+  consume(TOKEN_ARROW, "Expect '=>' after parameters.");
+
+  if (match(TOKEN_LEFT_BRACE)) {
+    // Block body: explicit return.
+    block();
+  } else {
+    // Expression body: implicit return.
+    expression();
+    emitByte(OP_RETURN);
+  }
+
+  ObjFunction* fn = endCompiler();
+  emitBytes(OP_CLOSURE, makeConstant(OBJ_VAL(fn)));
+
+  for (int i = 0; i < fn->upvalueCount; i++) {
+    emitByte(compiler.upvalues[i].isLocal ? 1 : 0);
+    emitByte(compiler.upvalues[i].index);
+  }
+}
+
+static void parenOrArrow(bool canAssign) {
+  // parser.previous is '('.
+  if (check(TOKEN_RIGHT_PAREN)) {
+    // () => ... — no params arrow.
+    arrowFunction();
+    return;
+  }
+
+  if (checkForArrow()) {
+    arrowFunction();
+    return;
+  }
+
+  // Regular grouping.
   expression();
   consume(TOKEN_RIGHT_PAREN, "Expect ')' after expression.");
 }
@@ -695,7 +785,7 @@ static void subscript(bool canAssign) {
 }
 
 ParseRule rules[] = {
-  [TOKEN_LEFT_PAREN]    = {grouping, call,   PREC_CALL},
+  [TOKEN_LEFT_PAREN]    = {parenOrArrow, call, PREC_CALL},
   [TOKEN_RIGHT_PAREN]   = {NULL,     NULL,   PREC_NONE},
   [TOKEN_LEFT_BRACE]    = {mapLiteral, NULL, PREC_NONE},
   [TOKEN_RIGHT_BRACE]   = {NULL,     NULL,   PREC_NONE},
@@ -720,6 +810,7 @@ ParseRule rules[] = {
   [TOKEN_STAR_EQUAL]    = {NULL,     NULL,   PREC_NONE},
   [TOKEN_SLASH_EQUAL]   = {NULL,     NULL,   PREC_NONE},
   [TOKEN_PERCENT_EQUAL] = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_ARROW]         = {NULL,     NULL,   PREC_NONE},
   [TOKEN_IDENTIFIER]    = {variable,     NULL,   PREC_NONE},
   [TOKEN_STRING]        = {string,     NULL,   PREC_NONE},
   [TOKEN_NUMBER]        = {number,   NULL,   PREC_NONE},
@@ -857,13 +948,8 @@ static void block() {
   consume(TOKEN_RIGHT_BRACE, "Expect '}' after block.");
 }
 
-static void function(FunctionType type) {
-  Compiler compiler;
-  initCompiler(&compiler, type);
-  beginScope(); 
-
-  consume(TOKEN_LEFT_PAREN, "Expect '(' after function name.");
-
+static void parseParameterList() {
+  bool hasDefault = false;
   if (!check(TOKEN_RIGHT_PAREN)) {
     do {
       current->function->arity++;
@@ -872,8 +958,46 @@ static void function(FunctionType type) {
       }
       uint8_t constant = parseVariable("Expect parameter name.");
       defineVariable(constant);
+
+      if (match(TOKEN_EQUAL)) {
+        if (!hasDefault) {
+          current->function->minArity = current->function->arity - 1;
+          hasDefault = true;
+        }
+        // Emit OP_DEFAULT_ARG <paramIndex> <jump placeholder>.
+        int paramIndex = current->function->arity - 1;
+        int slot = current->localCount - 1;
+        emitByte(OP_DEFAULT_ARG);
+        emitByte((uint8_t)paramIndex);
+        // Emit jump placeholder (2 bytes) using same pattern as emitJump.
+        emitByte(0xff);
+        emitByte(0xff);
+        int jump = currentChunk()->count - 2;
+
+        // Compile the default expression.
+        expression();
+        emitBytes(OP_SET_LOCAL, (uint8_t)slot);
+        emitByte(OP_POP);
+
+        // Patch the jump to skip over the default expression.
+        patchJump(jump);
+      } else if (hasDefault) {
+        error("Non-default parameter after default parameter.");
+      }
     } while (match(TOKEN_COMMA));
   }
+  if (!hasDefault) {
+    current->function->minArity = current->function->arity;
+  }
+}
+
+static void function(FunctionType type) {
+  Compiler compiler;
+  initCompiler(&compiler, type);
+  beginScope();
+
+  consume(TOKEN_LEFT_PAREN, "Expect '(' after function name.");
+  parseParameterList();
 
   consume(TOKEN_RIGHT_PAREN, "Expect ')' after parameters.");
   consume(TOKEN_LEFT_BRACE, "Expect '{' before function body.");
