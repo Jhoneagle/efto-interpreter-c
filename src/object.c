@@ -32,6 +32,15 @@ ObjArray* newArray() {
   return array;
 }
 
+ObjFile* newFile(FILE* file, ObjString* path, ObjString* mode) {
+  ObjFile* objFile = ALLOCATE_OBJ(ObjFile, OBJ_FILE);
+  objFile->file = file;
+  objFile->isOpen = true;
+  objFile->path = path;
+  objFile->mode = mode;
+  return objFile;
+}
+
 ObjMap* newMap() {
   ObjMap* map = ALLOCATE_OBJ(ObjMap, OBJ_MAP);
   initValueTable(&map->entries);
@@ -185,6 +194,9 @@ void printObject(Value value) {
     }
     case OBJ_BOUND_METHOD:
       printFunction(AS_BOUND_METHOD(value)->method->function);
+      break;
+    case OBJ_FILE:
+      printf("<file \"%s\">", AS_FILE(value)->path->chars);
       break;
     case OBJ_CLASS:
       printf("%s", AS_CLASS(value)->name->chars);

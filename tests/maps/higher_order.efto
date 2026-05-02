@@ -1,0 +1,72 @@
+// Higher-order map methods.
+
+var m = {"a": 1, "b": 2, "c": 3};
+
+// forEach — collect keys.
+var keys = [];
+m.forEach((k, v) => {
+  keys.push(k);
+});
+print keys.length; // expect: 3
+
+// forEach — sum values.
+var total = 0;
+m.forEach((k, v) => {
+  total = total + v;
+});
+print total; // expect: 6
+
+// map — double all values.
+var doubled = m.map((k, v) => v * 2);
+print doubled.has("a"); // expect: true
+print doubled.has("b"); // expect: true
+print doubled.has("c"); // expect: true
+print doubled.size; // expect: 3
+
+// filter — keep values > 1.
+var big = m.filter((k, v) => v > 1);
+print big.size; // expect: 2
+print big.has("a"); // expect: false
+print big.has("b"); // expect: true
+print big.has("c"); // expect: true
+
+// reduce with initial value.
+var sum = m.reduce((acc, k, v) => acc + v, 0);
+print sum; // expect: 6
+
+// reduce — concatenate keys.
+var allKeys = m.reduce((acc, k, v) => acc + k, "");
+print allKeys.length; // expect: 3
+
+// find — returns matching value.
+var found = m.find((k, v) => v == 2);
+print found; // expect: 2
+
+// find — returns nil when not found.
+var notFound = m.find((k, v) => v > 10);
+print notFound; // expect: nil
+
+// any.
+print m.any((k, v) => v > 2);  // expect: true
+print m.any((k, v) => v > 10); // expect: false
+
+// all.
+print m.all((k, v) => v > 0);  // expect: true
+print m.all((k, v) => v > 1);  // expect: false
+
+// Empty map.
+var empty = {};
+print empty.all((k, v) => false); // expect: true
+print empty.any((k, v) => true);  // expect: false
+print empty.find((k, v) => true); // expect: nil
+
+// Single-arg callback (key only).
+var keyList = [];
+m.forEach((k) => {
+  keyList.push(k);
+});
+print keyList.length; // expect: 3
+
+// map with single-arg callback.
+var upper = m.map((k) => k);
+print upper.size; // expect: 3

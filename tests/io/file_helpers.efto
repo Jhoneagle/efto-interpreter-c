@@ -1,0 +1,22 @@
+// Simple file I/O helpers.
+import io;
+
+// writeFile + readFile.
+io.writeFile("tests/io/_test_tmp.txt", "hello world");
+print io.readFile("tests/io/_test_tmp.txt"); // expect: hello world
+
+// fileExists.
+print io.fileExists("tests/io/_test_tmp.txt"); // expect: true
+print io.fileExists("tests/io/_no_such_file.txt"); // expect: false
+
+// appendFile.
+io.appendFile("tests/io/_test_tmp.txt", "\nsecond line");
+print io.readFile("tests/io/_test_tmp.txt"); // expect: hello world
+// expect: second line
+
+// deleteFile.
+print io.deleteFile("tests/io/_test_tmp.txt"); // expect: true
+print io.fileExists("tests/io/_test_tmp.txt"); // expect: false
+
+// deleteFile on non-existent file.
+print io.deleteFile("tests/io/_no_such_file.txt"); // expect: false

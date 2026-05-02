@@ -7,8 +7,9 @@ print type(3.14);          // expect: number
 print type("hello");       // expect: string
 print type([1, 2, 3]);     // expect: array
 print type({"a": 1});      // expect: map
-print type(clock);         // expect: function
 print type(type);          // expect: function
+fun dummy() {}
+print type(dummy);         // expect: function
 
 class Foo {}
 print type(Foo);           // expect: class

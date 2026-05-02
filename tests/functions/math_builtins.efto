@@ -1,20 +1,22 @@
+import math;
+
 // Math builtin functions.
-print sqrt(9);     // expect: 3
-print sqrt(2);     // expect: 1.41421
-print abs(-5);     // expect: 5
-print abs(3);      // expect: 3
-print floor(3.7);  // expect: 3
-print ceil(3.2);   // expect: 4
-print round(3.5);  // expect: 4
-print round(3.4);  // expect: 3
-print min(3, 7);   // expect: 3
-print max(3, 7);   // expect: 7
-print pow(2, 10);  // expect: 1024
+print math.sqrt(9);     // expect: 3
+print math.sqrt(2);     // expect: 1.41421
+print math.abs(-5);     // expect: 5
+print math.abs(3);      // expect: 3
+print math.floor(3.7);  // expect: 3
+print math.ceil(3.2);   // expect: 4
+print math.round(3.5);  // expect: 4
+print math.round(3.4);  // expect: 3
+print math.min(3, 7);   // expect: 3
+print math.max(3, 7);   // expect: 7
+print math.pow(2, 10);  // expect: 1024
 
 // parseInt.
-print parseInt("42");    // expect: 42
-print parseInt("3.14");  // expect: 3.14
+print math.parseInt("42");    // expect: 42
+print math.parseInt("3.14");  // expect: 3.14
 
 // random returns a number between 0 and 1.
-var r = random();
+var r = math.random();
 print r >= 0 and r <= 1; // expect: true

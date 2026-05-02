@@ -1,0 +1,42 @@
+// Handle-based file I/O.
+import io;
+
+// Write via handle.
+var out = io.open("tests/io/_test_handle.txt", "w");
+out.write("line1\nline2\nline3");
+out.close();
+
+// Read entire file via handle.
+var f = io.open("tests/io/_test_handle.txt", "r");
+var content = f.read();
+f.close();
+print content; // expect: line1
+// expect: line2
+// expect: line3
+
+// Read line by line.
+var f2 = io.open("tests/io/_test_handle.txt", "r");
+print f2.readLine(); // expect: line1
+print f2.readLine(); // expect: line2
+print f2.readLine(); // expect: line3
+f2.close();
+
+// Append via handle.
+var app = io.open("tests/io/_test_handle.txt", "a");
+app.write("\nline4");
+app.close();
+
+var f3 = io.open("tests/io/_test_handle.txt", "r");
+print f3.readLine(); // expect: line1
+print f3.readLine(); // expect: line2
+print f3.readLine(); // expect: line3
+print f3.readLine(); // expect: line4
+f3.close();
+
+// type() returns "file".
+var f4 = io.open("tests/io/_test_handle.txt", "r");
+print type(f4); // expect: file
+f4.close();
+
+// Cleanup.
+io.deleteFile("tests/io/_test_handle.txt");

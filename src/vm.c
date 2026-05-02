@@ -20,6 +20,8 @@ static void runtimeError(const char* format, ...);
 static void closeUpvalues(Value* last);
 static ObjString* stringify(Value value);
 static bool callValue(Value callee, int argCount);
+static bool vmCallValue(Value callee, int argCount, Value* result);
+static int getCallableArity(Value callee);
 static InterpretResult run(int baseFrame);
 
 static Value clockNative(int argCount, Value* args) {
@@ -121,6 +123,299 @@ static bool mapRemove(Value receiver, int argCount, Value* args,
                       Value* result) {
   ObjMap* map = AS_MAP(receiver);
   *result = BOOL_VAL(valueTableDelete(&map->entries, args[0]));
+  return true;
+}
+
+// --- Higher-order map methods ---
+
+static bool mapForEach(Value receiver, int argCount, Value* args,
+                       Value* result) {
+  ObjMap* map = AS_MAP(receiver);
+  Value callback = args[0];
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 2) ? 2 : 1;
+
+  push(receiver);
+  push(callback);
+
+  for (int i = 0; i < map->entries.capacity; i++) {
+    ObjMap* src = AS_MAP(vm.stackTop[-2]);
+    ValueEntry* entry = &src->entries.entries[i];
+    if (!entry->occupied) continue;
+
+    Value cb = vm.stackTop[-1];
+    push(cb);
+    push(entry->key);
+    if (passArgs >= 2) push(entry->value);
+
+    Value dummy;
+    if (!vmCallValue(cb, passArgs, &dummy)) {
+      vm.stackTop -= 2;
+      return false;
+    }
+  }
+
+  vm.stackTop -= 2;
+  *result = NIL_VAL;
+  return true;
+}
+
+static bool mapMapMethod(Value receiver, int argCount, Value* args,
+                         Value* result) {
+  ObjMap* map = AS_MAP(receiver);
+  Value callback = args[0];
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 2) ? 2 : 1;
+
+  ObjMap* resultMap = newMap();
+
+  push(receiver);
+  push(callback);
+  push(OBJ_VAL(resultMap));
+
+  for (int i = 0; i < map->entries.capacity; i++) {
+    ObjMap* src = AS_MAP(vm.stackTop[-3]);
+    ValueEntry* entry = &src->entries.entries[i];
+    if (!entry->occupied) continue;
+
+    Value cb = vm.stackTop[-2];
+    push(cb);
+    push(entry->key);
+    if (passArgs >= 2) push(entry->value);
+
+    Value mapped;
+    if (!vmCallValue(cb, passArgs, &mapped)) {
+      vm.stackTop -= 3;
+      return false;
+    }
+
+    ObjMap* dst = AS_MAP(vm.stackTop[-1]);
+    src = AS_MAP(vm.stackTop[-3]);
+    valueTableSet(&dst->entries, src->entries.entries[i].key, mapped);
+  }
+
+  *result = vm.stackTop[-1];
+  vm.stackTop -= 3;
+  return true;
+}
+
+static bool mapFilter(Value receiver, int argCount, Value* args,
+                      Value* result) {
+  ObjMap* map = AS_MAP(receiver);
+  Value callback = args[0];
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 2) ? 2 : 1;
+
+  ObjMap* resultMap = newMap();
+
+  push(receiver);
+  push(callback);
+  push(OBJ_VAL(resultMap));
+
+  for (int i = 0; i < map->entries.capacity; i++) {
+    ObjMap* src = AS_MAP(vm.stackTop[-3]);
+    ValueEntry* entry = &src->entries.entries[i];
+    if (!entry->occupied) continue;
+
+    Value cb = vm.stackTop[-2];
+    push(cb);
+    push(entry->key);
+    if (passArgs >= 2) push(entry->value);
+
+    Value test;
+    if (!vmCallValue(cb, passArgs, &test)) {
+      vm.stackTop -= 3;
+      return false;
+    }
+
+    if (!IS_NIL(test) && !(IS_BOOL(test) && !AS_BOOL(test))) {
+      ObjMap* dst = AS_MAP(vm.stackTop[-1]);
+      src = AS_MAP(vm.stackTop[-3]);
+      valueTableSet(&dst->entries, src->entries.entries[i].key,
+                    src->entries.entries[i].value);
+    }
+  }
+
+  *result = vm.stackTop[-1];
+  vm.stackTop -= 3;
+  return true;
+}
+
+static bool mapReduce(Value receiver, int argCount, Value* args,
+                      Value* result) {
+  ObjMap* map = AS_MAP(receiver);
+  Value callback = args[0];
+  Value accumulator;
+  bool hasInit = (argCount == 2);
+
+  if (hasInit) {
+    accumulator = args[1];
+  } else {
+    if (map->entries.liveCount == 0) {
+      runtimeError("reduce() of empty map with no initial value.");
+      return false;
+    }
+    // Use first entry's value as initial accumulator.
+    for (int i = 0; i < map->entries.capacity; i++) {
+      if (map->entries.entries[i].occupied) {
+        accumulator = map->entries.entries[i].value;
+        break;
+      }
+    }
+  }
+
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 3) ? 3 : 2;
+  bool skipFirst = !hasInit;
+
+  push(receiver);
+  push(callback);
+  push(accumulator);
+
+  for (int i = 0; i < map->entries.capacity; i++) {
+    ObjMap* src = AS_MAP(vm.stackTop[-3]);
+    ValueEntry* entry = &src->entries.entries[i];
+    if (!entry->occupied) continue;
+
+    if (skipFirst) {
+      skipFirst = false;
+      continue;
+    }
+
+    Value cb = vm.stackTop[-2];
+    Value acc = vm.stackTop[-1];
+
+    push(cb);
+    push(acc);
+    push(entry->key);
+    if (passArgs >= 3) push(entry->value);
+
+    Value reduced;
+    if (!vmCallValue(cb, passArgs, &reduced)) {
+      vm.stackTop -= 3;
+      return false;
+    }
+
+    vm.stackTop[-1] = reduced;
+  }
+
+  *result = vm.stackTop[-1];
+  vm.stackTop -= 3;
+  return true;
+}
+
+static bool mapFind(Value receiver, int argCount, Value* args,
+                    Value* result) {
+  ObjMap* map = AS_MAP(receiver);
+  Value callback = args[0];
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 2) ? 2 : 1;
+
+  push(receiver);
+  push(callback);
+
+  for (int i = 0; i < map->entries.capacity; i++) {
+    ObjMap* src = AS_MAP(vm.stackTop[-2]);
+    ValueEntry* entry = &src->entries.entries[i];
+    if (!entry->occupied) continue;
+
+    Value cb = vm.stackTop[-1];
+    push(cb);
+    push(entry->key);
+    if (passArgs >= 2) push(entry->value);
+
+    Value test;
+    if (!vmCallValue(cb, passArgs, &test)) {
+      vm.stackTop -= 2;
+      return false;
+    }
+
+    if (!IS_NIL(test) && !(IS_BOOL(test) && !AS_BOOL(test))) {
+      src = AS_MAP(vm.stackTop[-2]);
+      *result = src->entries.entries[i].value;
+      vm.stackTop -= 2;
+      return true;
+    }
+  }
+
+  vm.stackTop -= 2;
+  *result = NIL_VAL;
+  return true;
+}
+
+static bool mapAny(Value receiver, int argCount, Value* args,
+                   Value* result) {
+  ObjMap* map = AS_MAP(receiver);
+  Value callback = args[0];
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 2) ? 2 : 1;
+
+  push(receiver);
+  push(callback);
+
+  for (int i = 0; i < map->entries.capacity; i++) {
+    ObjMap* src = AS_MAP(vm.stackTop[-2]);
+    ValueEntry* entry = &src->entries.entries[i];
+    if (!entry->occupied) continue;
+
+    Value cb = vm.stackTop[-1];
+    push(cb);
+    push(entry->key);
+    if (passArgs >= 2) push(entry->value);
+
+    Value test;
+    if (!vmCallValue(cb, passArgs, &test)) {
+      vm.stackTop -= 2;
+      return false;
+    }
+
+    if (!IS_NIL(test) && !(IS_BOOL(test) && !AS_BOOL(test))) {
+      vm.stackTop -= 2;
+      *result = BOOL_VAL(true);
+      return true;
+    }
+  }
+
+  vm.stackTop -= 2;
+  *result = BOOL_VAL(false);
+  return true;
+}
+
+static bool mapAll(Value receiver, int argCount, Value* args,
+                   Value* result) {
+  ObjMap* map = AS_MAP(receiver);
+  Value callback = args[0];
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 2) ? 2 : 1;
+
+  push(receiver);
+  push(callback);
+
+  for (int i = 0; i < map->entries.capacity; i++) {
+    ObjMap* src = AS_MAP(vm.stackTop[-2]);
+    ValueEntry* entry = &src->entries.entries[i];
+    if (!entry->occupied) continue;
+
+    Value cb = vm.stackTop[-1];
+    push(cb);
+    push(entry->key);
+    if (passArgs >= 2) push(entry->value);
+
+    Value test;
+    if (!vmCallValue(cb, passArgs, &test)) {
+      vm.stackTop -= 2;
+      return false;
+    }
+
+    if (IS_NIL(test) || (IS_BOOL(test) && !AS_BOOL(test))) {
+      vm.stackTop -= 2;
+      *result = BOOL_VAL(false);
+      return true;
+    }
+  }
+
+  vm.stackTop -= 2;
+  *result = BOOL_VAL(true);
   return true;
 }
 
@@ -583,6 +878,7 @@ static Value typeNative(int argCount, Value* args) {
       case OBJ_ARRAY:         return OBJ_VAL(copyString("array", 5));
       case OBJ_MAP:           return OBJ_VAL(copyString("map", 3));
       case OBJ_CLASS:         return OBJ_VAL(copyString("class", 5));
+      case OBJ_FILE:          return OBJ_VAL(copyString("file", 4));
       case OBJ_INSTANCE:      return OBJ_VAL(copyString("instance", 8));
       case OBJ_MODULE:        return OBJ_VAL(copyString("module", 6));
       case OBJ_FUNCTION:
@@ -677,6 +973,224 @@ static Value parseIntNative(int argCount, Value* args) {
   return NUMBER_VAL(result);
 }
 
+// --- File handle methods ---
+
+static bool fileRead(Value receiver, int argCount, Value* args,
+                     Value* result) {
+  ObjFile* file = AS_FILE(receiver);
+  if (!file->isOpen) {
+    runtimeError("Cannot read from a closed file.");
+    return false;
+  }
+
+  long current = ftell(file->file);
+  fseek(file->file, 0L, SEEK_END);
+  long end = ftell(file->file);
+  fseek(file->file, current, SEEK_SET);
+
+  size_t remaining = (size_t)(end - current);
+  char* buffer = ALLOCATE(char, remaining + 1);
+  size_t bytesRead = fread(buffer, 1, remaining, file->file);
+  buffer[bytesRead] = '\0';
+
+  *result = OBJ_VAL(takeString(buffer, (int)bytesRead));
+  return true;
+}
+
+static bool fileReadLine(Value receiver, int argCount, Value* args,
+                         Value* result) {
+  ObjFile* file = AS_FILE(receiver);
+  if (!file->isOpen) {
+    runtimeError("Cannot read from a closed file.");
+    return false;
+  }
+
+  char buffer[4096];
+  if (fgets(buffer, sizeof(buffer), file->file) == NULL) {
+    *result = NIL_VAL;
+    return true;
+  }
+
+  // Strip trailing newline.
+  int len = (int)strlen(buffer);
+  if (len > 0 && buffer[len - 1] == '\n') {
+    len--;
+    if (len > 0 && buffer[len - 1] == '\r') len--;
+  }
+
+  *result = OBJ_VAL(copyString(buffer, len));
+  return true;
+}
+
+static bool fileWrite(Value receiver, int argCount, Value* args,
+                      Value* result) {
+  ObjFile* file = AS_FILE(receiver);
+  if (!file->isOpen) {
+    runtimeError("Cannot write to a closed file.");
+    return false;
+  }
+  if (!IS_STRING(args[0])) {
+    runtimeError("write() expects a string argument.");
+    return false;
+  }
+
+  ObjString* str = AS_STRING(args[0]);
+  fwrite(str->chars, 1, str->length, file->file);
+  fflush(file->file);
+  *result = NIL_VAL;
+  return true;
+}
+
+static bool fileClose(Value receiver, int argCount, Value* args,
+                      Value* result) {
+  ObjFile* file = AS_FILE(receiver);
+  if (file->isOpen && file->file != NULL) {
+    fclose(file->file);
+    file->file = NULL;
+    file->isOpen = false;
+  }
+  *result = NIL_VAL;
+  return true;
+}
+
+// --- I/O native functions ---
+
+static Value ioInputNative(int argCount, Value* args) {
+  if (argCount > 0 && IS_STRING(args[0])) {
+    printf("%s", AS_STRING(args[0])->chars);
+    fflush(stdout);
+  }
+
+  char buffer[4096];
+  if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
+    return NIL_VAL;
+  }
+
+  int len = (int)strlen(buffer);
+  if (len > 0 && buffer[len - 1] == '\n') {
+    len--;
+    if (len > 0 && buffer[len - 1] == '\r') len--;
+  }
+
+  return OBJ_VAL(copyString(buffer, len));
+}
+
+static Value ioReadFileNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("readFile() expects a string path argument.");
+    return NIL_VAL;
+  }
+
+  FILE* file = fopen(AS_CSTRING(args[0]), "r");
+  if (file == NULL) {
+    runtimeError("Could not read file '%s'.", AS_CSTRING(args[0]));
+    return NIL_VAL;
+  }
+
+  fseek(file, 0L, SEEK_END);
+  long fileSize = ftell(file);
+  rewind(file);
+
+  char* buffer = ALLOCATE(char, fileSize + 1);
+  size_t bytesRead = fread(buffer, 1, fileSize, file);
+  fclose(file);
+  buffer[bytesRead] = '\0';
+
+  return OBJ_VAL(takeString(buffer, (int)bytesRead));
+}
+
+static Value ioWriteFileNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_STRING(args[0]) || !IS_STRING(args[1])) {
+    runtimeError("writeFile() expects (path, content) string arguments.");
+    return NIL_VAL;
+  }
+
+  FILE* file = fopen(AS_CSTRING(args[0]), "w");
+  if (file == NULL) {
+    runtimeError("Could not open file '%s' for writing.",
+                 AS_CSTRING(args[0]));
+    return NIL_VAL;
+  }
+
+  ObjString* content = AS_STRING(args[1]);
+  fwrite(content->chars, 1, content->length, file);
+  fclose(file);
+  return NIL_VAL;
+}
+
+static Value ioAppendFileNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_STRING(args[0]) || !IS_STRING(args[1])) {
+    runtimeError("appendFile() expects (path, content) string arguments.");
+    return NIL_VAL;
+  }
+
+  FILE* file = fopen(AS_CSTRING(args[0]), "a");
+  if (file == NULL) {
+    runtimeError("Could not open file '%s' for appending.",
+                 AS_CSTRING(args[0]));
+    return NIL_VAL;
+  }
+
+  ObjString* content = AS_STRING(args[1]);
+  fwrite(content->chars, 1, content->length, file);
+  fclose(file);
+  return NIL_VAL;
+}
+
+static Value ioFileExistsNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("fileExists() expects a string path argument.");
+    return NIL_VAL;
+  }
+
+  FILE* file = fopen(AS_CSTRING(args[0]), "r");
+  if (file != NULL) {
+    fclose(file);
+    return BOOL_VAL(true);
+  }
+  return BOOL_VAL(false);
+}
+
+static Value ioDeleteFileNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("deleteFile() expects a string path argument.");
+    return NIL_VAL;
+  }
+
+  return BOOL_VAL(remove(AS_CSTRING(args[0])) == 0);
+}
+
+static Value ioOpenNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_STRING(args[0]) || !IS_STRING(args[1])) {
+    runtimeError("open() expects (path, mode) string arguments.");
+    return NIL_VAL;
+  }
+
+  ObjString* path = AS_STRING(args[0]);
+  ObjString* mode = AS_STRING(args[1]);
+
+  // Validate mode.
+  const char* m = mode->chars;
+  if (strcmp(m, "r") != 0 && strcmp(m, "w") != 0 && strcmp(m, "a") != 0) {
+    runtimeError("open() mode must be \"r\", \"w\", or \"a\".");
+    return NIL_VAL;
+  }
+
+  FILE* file = fopen(path->chars, m);
+  if (file == NULL) {
+    runtimeError("Could not open file '%s' with mode '%s'.",
+                 path->chars, mode->chars);
+    return NIL_VAL;
+  }
+
+  push(OBJ_VAL(path));  // GC protect
+  push(OBJ_VAL(mode));  // GC protect
+  ObjFile* objFile = newFile(file, path, mode);
+  pop(); // mode
+  pop(); // path
+  return OBJ_VAL(objFile);
+}
+
 static void resetStack() {
   vm.stackTop = vm.stack;
   vm.frameCount = 0;
@@ -761,6 +1275,29 @@ static void defineNativeMethod(ObjClass* klass, const char* name,
   pop();
 }
 
+static ObjModule* registerBuiltinModule(const char* name) {
+  ObjString* nameStr = copyString(name, (int)strlen(name));
+  push(OBJ_VAL(nameStr)); // GC protect
+  ObjString* pathStr = copyString("<builtin>", 9);
+  push(OBJ_VAL(pathStr)); // GC protect
+  ObjModule* module = newModule(nameStr, pathStr);
+  push(OBJ_VAL(module)); // GC protect
+  tableSet(&vm.importCache, nameStr, OBJ_VAL(module));
+  pop(); // module
+  pop(); // pathStr
+  pop(); // nameStr
+  return module;
+}
+
+static void defineModuleNative(ObjModule* module, const char* name,
+                               NativeFn function) {
+  push(OBJ_VAL(copyString(name, (int)strlen(name))));
+  push(OBJ_VAL(newNative(function)));
+  tableSet(&module->values, AS_STRING(vm.stack[0]), vm.stack[1]);
+  pop();
+  pop();
+}
+
 static void defineNativeMethodVar(ObjClass* klass, const char* name,
                                   NativeMethodFn function,
                                   int minArity, int maxArity) {
@@ -789,6 +1326,8 @@ static ObjString* stringify(Value value) {
     switch (OBJ_TYPE(value)) {
       case OBJ_CLASS:
         return AS_CLASS(value)->name;
+      case OBJ_FILE:
+        return AS_FILE(value)->path;
       case OBJ_MODULE:
         return AS_MODULE(value)->name;
       case OBJ_INSTANCE: {
@@ -917,6 +1456,20 @@ void initVM() {
     defineNativeMethod(vm.mapMethods, "keys", mapKeys, 0);
     defineNativeMethod(vm.mapMethods, "values", mapValues, 0);
     defineNativeMethod(vm.mapMethods, "remove", mapRemove, 1);
+    defineNativeMethod(vm.mapMethods, "forEach", mapForEach, 1);
+    defineNativeMethod(vm.mapMethods, "map", mapMapMethod, 1);
+    defineNativeMethod(vm.mapMethods, "filter", mapFilter, 1);
+    defineNativeMethodVar(vm.mapMethods, "reduce", mapReduce, 1, 2);
+    defineNativeMethod(vm.mapMethods, "find", mapFind, 1);
+    defineNativeMethod(vm.mapMethods, "any", mapAny, 1);
+    defineNativeMethod(vm.mapMethods, "all", mapAll, 1);
+
+    vm.fileMethods = NULL;
+    vm.fileMethods = newClass(copyString("File", 4));
+    defineNativeMethod(vm.fileMethods, "read", fileRead, 0);
+    defineNativeMethod(vm.fileMethods, "readLine", fileReadLine, 0);
+    defineNativeMethod(vm.fileMethods, "write", fileWrite, 1);
+    defineNativeMethod(vm.fileMethods, "close", fileClose, 0);
 
     vm.stringMethods = NULL;
     vm.stringMethods = newClass(copyString("String", 6));
@@ -927,18 +1480,34 @@ void initVM() {
     defineNativeMethod(vm.stringMethods, "split", stringSplit, 1);
     defineNativeMethod(vm.stringMethods, "trim", stringTrim, 0);
 
-    defineNative("clock", clockNative);
     defineNative("type", typeNative);
-    defineNative("sqrt", sqrtNative);
-    defineNative("abs", absNative);
-    defineNative("floor", floorNative);
-    defineNative("ceil", ceilNative);
-    defineNative("round", roundNative);
-    defineNative("min", minNative);
-    defineNative("max", maxNative);
-    defineNative("pow", powNative);
-    defineNative("random", randomNative);
-    defineNative("parseInt", parseIntNative);
+
+    // Built-in 'math' module.
+    ObjModule* mathModule = registerBuiltinModule("math");
+    defineModuleNative(mathModule, "sqrt", sqrtNative);
+    defineModuleNative(mathModule, "abs", absNative);
+    defineModuleNative(mathModule, "floor", floorNative);
+    defineModuleNative(mathModule, "ceil", ceilNative);
+    defineModuleNative(mathModule, "round", roundNative);
+    defineModuleNative(mathModule, "min", minNative);
+    defineModuleNative(mathModule, "max", maxNative);
+    defineModuleNative(mathModule, "pow", powNative);
+    defineModuleNative(mathModule, "random", randomNative);
+    defineModuleNative(mathModule, "parseInt", parseIntNative);
+
+    // Built-in 'time' module.
+    ObjModule* timeModule = registerBuiltinModule("time");
+    defineModuleNative(timeModule, "clock", clockNative);
+
+    // Built-in 'io' module.
+    ObjModule* ioModule = registerBuiltinModule("io");
+    defineModuleNative(ioModule, "input", ioInputNative);
+    defineModuleNative(ioModule, "readFile", ioReadFileNative);
+    defineModuleNative(ioModule, "writeFile", ioWriteFileNative);
+    defineModuleNative(ioModule, "appendFile", ioAppendFileNative);
+    defineModuleNative(ioModule, "fileExists", ioFileExistsNative);
+    defineModuleNative(ioModule, "deleteFile", ioDeleteFileNative);
+    defineModuleNative(ioModule, "open", ioOpenNative);
 
     srand((unsigned int)time(NULL));
 }
@@ -1097,6 +1666,10 @@ static bool invoke(ObjString* name, int argCount) {
 
   if (IS_MAP(receiver)) {
     return invokeFromClass(vm.mapMethods, name, argCount);
+  }
+
+  if (IS_FILE(receiver)) {
+    return invokeFromClass(vm.fileMethods, name, argCount);
   }
 
   if (!IS_INSTANCE(receiver)) {
@@ -1650,6 +2223,14 @@ static InterpretResult run(int baseFrame) {
         break;
       case OP_IMPORT: {
         ObjString* moduleName = READ_STRING();
+
+        // Check for built-in module by name.
+        Value builtinCached;
+        if (tableGet(&vm.importCache, moduleName, &builtinCached) &&
+            IS_MODULE(builtinCached)) {
+          push(builtinCached);
+          break;
+        }
 
         // Resolve path by searching all search paths.
         char* resolvedPath = resolveModulePath(

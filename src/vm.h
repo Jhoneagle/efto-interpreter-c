@@ -47,6 +47,7 @@ typedef struct {
   Table strings;
   ObjString* initString;
   ObjClass* arrayMethods;
+  ObjClass* fileMethods;
   ObjClass* mapMethods;
   ObjClass* stringMethods;
   ObjUpvalue* openUpvalues;

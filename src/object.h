@@ -1,6 +1,8 @@
 #ifndef clox_object_h
 #define clox_object_h
 
+#include <stdio.h>
+
 #include "common.h"
 #include "chunk.h"
 #include "table.h"
@@ -10,6 +12,7 @@
 #define OBJ_TYPE(value)        (AS_OBJ(value)->type)
 
 #define IS_ARRAY(value)        isObjType(value, OBJ_ARRAY)
+#define IS_FILE(value)         isObjType(value, OBJ_FILE)
 #define IS_MAP(value)          isObjType(value, OBJ_MAP)
 #define IS_MODULE(value)       isObjType(value, OBJ_MODULE)
 #define IS_BOUND_METHOD(value) isObjType(value, OBJ_BOUND_METHOD)
@@ -22,6 +25,7 @@
 #define IS_STRING(value)       isObjType(value, OBJ_STRING)
 
 #define AS_ARRAY(value)        ((ObjArray*)AS_OBJ(value))
+#define AS_FILE(value)         ((ObjFile*)AS_OBJ(value))
 #define AS_MAP(value)          ((ObjMap*)AS_OBJ(value))
 #define AS_MODULE(value)       ((ObjModule*)AS_OBJ(value))
 #define AS_BOUND_METHOD(value) ((ObjBoundMethod*)AS_OBJ(value))
@@ -38,6 +42,7 @@
 typedef enum {
   OBJ_ARRAY,
   OBJ_BOUND_METHOD,
+  OBJ_FILE,
   OBJ_MODULE,
   OBJ_CLASS,
   OBJ_CLOSURE,
@@ -65,6 +70,14 @@ typedef struct {
   Obj obj;
   ValueTable entries;
 } ObjMap;
+
+typedef struct {
+  Obj obj;
+  FILE* file;
+  bool isOpen;
+  ObjString* mode;
+  ObjString* path;
+} ObjFile;
 
 typedef struct {
   Obj obj;
@@ -141,6 +154,7 @@ typedef struct {
 } ObjBoundMethod;
 
 ObjArray* newArray();
+ObjFile* newFile(FILE* file, ObjString* path, ObjString* mode);
 ObjMap* newMap();
 ObjModule* newModule(ObjString* name, ObjString* path);
 ObjBoundMethod* newBoundMethod(Value receiver,

@@ -89,6 +89,12 @@ static void blackenObject(Obj* object) {
       markObject((Obj*)bound->method);
       break;
     }
+    case OBJ_FILE: {
+      ObjFile* file = (ObjFile*)object;
+      markObject((Obj*)file->path);
+      markObject((Obj*)file->mode);
+      break;
+    }
     case OBJ_INSTANCE: {
       ObjInstance* instance = (ObjInstance*)object;
       markObject((Obj*)instance->klass);
@@ -153,6 +159,14 @@ static void freeObject(Obj* object) {
     case OBJ_BOUND_METHOD:
       FREE(ObjBoundMethod, object);
       break;
+    case OBJ_FILE: {
+      ObjFile* file = (ObjFile*)object;
+      if (file->isOpen && file->file != NULL) {
+        fclose(file->file);
+      }
+      FREE(ObjFile, object);
+      break;
+    }
     case OBJ_CLASS: {
       ObjClass* klass = (ObjClass*)object;
       freeTable(&klass->methods);
@@ -239,6 +253,7 @@ static void markRoots() {
   markValue(vm.currentException);
   markObject((Obj*)vm.initString);
   markObject((Obj*)vm.arrayMethods);
+  markObject((Obj*)vm.fileMethods);
   markObject((Obj*)vm.mapMethods);
   markObject((Obj*)vm.stringMethods);
   markTable(&vm.importCache);

@@ -1,4 +1,6 @@
-// clock() returns a number.
-var t = clock();
+import time;
+
+// time.clock() returns a number.
+var t = time.clock();
 print t >= 0;    // expect: true
 print t < 10000; // expect: true

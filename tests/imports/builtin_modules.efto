@@ -1,0 +1,23 @@
+// Built-in modules can be imported without files.
+
+import math;
+print math.sqrt(9);   // expect: 3
+print math.abs(-5);   // expect: 5
+print math.floor(3.7); // expect: 3
+print math.ceil(3.2);  // expect: 4
+print math.round(3.5); // expect: 4
+print math.min(3, 7);  // expect: 3
+print math.max(3, 7);  // expect: 7
+print math.pow(2, 8);  // expect: 256
+print math.parseInt("42"); // expect: 42
+
+var r = math.random();
+print r >= 0 and r <= 1; // expect: true
+
+import time;
+var t = time.clock();
+print t >= 0; // expect: true
+
+// Importing same module twice returns cached version.
+import math as math2;
+print math2.sqrt(16); // expect: 4
