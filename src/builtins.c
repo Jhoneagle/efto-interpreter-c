@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -171,6 +172,8 @@ static bool arraySort(Value receiver, int argCount, Value* args,
           }
           double d = AS_NUMBER(cmpResult);
           cmp = (d < 0) ? -1 : (d > 0) ? 1 : 0;
+        } else if (vm.frameCount == 0) {
+          return false;
         } else {
           cmp = sortCompare(&left, &keyVal);
         }
@@ -876,6 +879,10 @@ static bool stringRepeat(Value receiver, int argCount, Value* args,
   }
 
   int len = str->length;
+  if (n > 0 && len > INT_MAX / n) {
+    runtimeError("repeat() result too large.");
+    return false;
+  }
   int newLen = len * n;
   char* buffer = ALLOCATE(char, newLen + 1);
   for (int i = 0; i < n; i++) {
@@ -1241,7 +1248,7 @@ static Value toNumberNative(int argCount, Value* args) {
   if (IS_STRING(v)) {
     char* end;
     double d = strtod(AS_CSTRING(v), &end);
-    if (end == AS_CSTRING(v)) {
+    if (end == AS_CSTRING(v) || *end != '\0') {
       runtimeError("Cannot convert '%s' to number.", AS_CSTRING(v));
       return NIL_VAL;
     }
@@ -1341,14 +1348,14 @@ static Value randomNative(int argCount, Value* args) {
   return NUMBER_VAL((double)rand() / RAND_MAX);
 }
 
-static Value parseIntNative(int argCount, Value* args) {
+static Value parseNumberNative(int argCount, Value* args) {
   if (argCount != 1 || !IS_STRING(args[0])) {
-    runtimeError("parseInt() expects a string argument.");
+    runtimeError("parseNumber() expects a string argument.");
     return NIL_VAL;
   }
   char* end;
   double result = strtod(AS_STRING(args[0])->chars, &end);
-  if (end == AS_STRING(args[0])->chars) return NIL_VAL;
+  if (end == AS_STRING(args[0])->chars || *end != '\0') return NIL_VAL;
   return NUMBER_VAL(result);
 }
 
@@ -1614,8 +1621,10 @@ static Value arrayConstructorNative(int argCount, Value* args) {
       runtimeError("Array() argument must be a type or class.");
       return NIL_VAL;
     }
+    push(OBJ_VAL(desc)); // GC protect desc across newArray()
     ObjArray* array = newArray();
     array->elementType = desc;
+    pop(); // desc
     return OBJ_VAL(array);
   }
   runtimeError("Array() expects 0 or 1 arguments.");
@@ -1626,14 +1635,23 @@ static Value mapConstructorNative(int argCount, Value* args) {
   if (argCount == 0) return OBJ_VAL(newMap());
   if (argCount == 2) {
     ObjTypeDescriptor* kDesc = resolveTypeArg(args[0]);
-    ObjTypeDescriptor* vDesc = resolveTypeArg(args[1]);
-    if (kDesc == NULL || vDesc == NULL) {
+    if (kDesc == NULL) {
       runtimeError("Map() arguments must be types or classes.");
       return NIL_VAL;
     }
+    push(OBJ_VAL(kDesc)); // GC protect across second resolveTypeArg + newMap
+    ObjTypeDescriptor* vDesc = resolveTypeArg(args[1]);
+    if (vDesc == NULL) {
+      pop(); // kDesc
+      runtimeError("Map() arguments must be types or classes.");
+      return NIL_VAL;
+    }
+    push(OBJ_VAL(vDesc)); // GC protect across newMap
     ObjMap* map = newMap();
     map->keyType = kDesc;
     map->valueType = vDesc;
+    pop(); // vDesc
+    pop(); // kDesc
     return OBJ_VAL(map);
   }
   runtimeError("Map() expects 0 or 2 arguments.");
@@ -1789,7 +1807,7 @@ void registerBuiltins(void) {
   defineModuleNative(mathModule, "max", maxNative);
   defineModuleNative(mathModule, "pow", powNative);
   defineModuleNative(mathModule, "random", randomNative);
-  defineModuleNative(mathModule, "parseInt", parseIntNative);
+  defineModuleNative(mathModule, "parseNumber", parseNumberNative);
 
   // Built-in 'time' module.
   ObjModule* timeModule = registerBuiltinModule("time");

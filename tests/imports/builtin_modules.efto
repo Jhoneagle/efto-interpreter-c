@@ -9,7 +9,7 @@ print math.round(3.5); // expect: 4
 print math.min(3, 7);  // expect: 3
 print math.max(3, 7);  // expect: 7
 print math.pow(2, 8);  // expect: 256
-print math.parseInt("42"); // expect: 42
+print math.parseNumber("42"); // expect: 42
 
 var r = math.random();
 print r >= 0 and r <= 1; // expect: true

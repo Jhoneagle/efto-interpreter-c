@@ -124,7 +124,9 @@ ObjString* stringify(Value value) {
       case OBJ_INSTANCE: {
         Value toStrMethod;
         if (tableGet(&AS_INSTANCE(value)->klass->methods,
-                     vm.magicToString, &toStrMethod)) {
+                     vm.magicToString, &toStrMethod) &&
+            IS_CLOSURE(toStrMethod) &&
+            AS_CLOSURE(toStrMethod)->function->arity == 0) {
           Value strResult;
           if (callMagicUnary(value, vm.magicToString, &strResult)) {
             if (IS_STRING(strResult)) return AS_STRING(strResult);
@@ -291,6 +293,10 @@ void freeVM() {
 }
 
 void push(Value value) {
+  if (vm.stackTop >= vm.stack + STACK_MAX) {
+    fprintf(stderr, "Stack overflow.\n");
+    exit(70);
+  }
   *vm.stackTop = value;
   vm.stackTop++;
 }
@@ -451,7 +457,8 @@ bool callMagicBinary(Value left, ObjString* name,
   push(right);
   int framesBefore = vm.frameCount;
   if (!call(AS_CLOSURE(method), 1)) {
-    pop(); pop();
+    // call() failed and called runtimeError() which reset the stack.
+    // Don't pop — the pushed values are already gone.
     return false;
   }
   if (vm.frameCount > framesBefore) {
@@ -468,7 +475,8 @@ bool callMagicUnary(Value operand, ObjString* name, Value* result) {
   push(operand);
   int framesBefore = vm.frameCount;
   if (!call(AS_CLOSURE(method), 0)) {
-    pop();
+    // call() failed and called runtimeError() which reset the stack.
+    // Don't pop — the pushed value is already gone.
     return false;
   }
   if (vm.frameCount > framesBefore) {
@@ -1034,6 +1042,8 @@ static InterpretResult run(int baseFrame) {
           if (callMagicBinary(a, vm.magicEq, b, &result)) {
             push(BOOL_VAL(!IS_NIL(result) &&
                  !(IS_BOOL(result) && !AS_BOOL(result))));
+          } else if (vm.frameCount == 0) {
+            return INTERPRET_RUNTIME_ERROR;
           } else {
             push(BOOL_VAL(false));
           }
@@ -1055,6 +1065,8 @@ static InterpretResult run(int baseFrame) {
               return INTERPRET_RUNTIME_ERROR;
             }
             push(BOOL_VAL(AS_NUMBER(result) > 0));
+          } else if (vm.frameCount == 0) {
+            return INTERPRET_RUNTIME_ERROR;
           } else {
             runtimeError("Operands must be numbers.");
             return INTERPRET_RUNTIME_ERROR;
@@ -1077,6 +1089,8 @@ static InterpretResult run(int baseFrame) {
               return INTERPRET_RUNTIME_ERROR;
             }
             push(BOOL_VAL(AS_NUMBER(result) < 0));
+          } else if (vm.frameCount == 0) {
+            return INTERPRET_RUNTIME_ERROR;
           } else {
             runtimeError("Operands must be numbers.");
             return INTERPRET_RUNTIME_ERROR;
@@ -1097,6 +1111,8 @@ static InterpretResult run(int baseFrame) {
           Value result;
           if (callMagicBinary(a, vm.magicAdd, b, &result)) {
             push(result);
+          } else if (vm.frameCount == 0) {
+            return INTERPRET_RUNTIME_ERROR;
           } else {
             runtimeError(
                 "Operands must be two numbers or two strings.");
@@ -1116,6 +1132,8 @@ static InterpretResult run(int baseFrame) {
           Value result;
           if (callMagicBinary(a, vm.magicSub, b, &result)) {
             push(result);
+          } else if (vm.frameCount == 0) {
+            return INTERPRET_RUNTIME_ERROR;
           } else {
             runtimeError("Operands must be numbers.");
             return INTERPRET_RUNTIME_ERROR;
@@ -1134,6 +1152,8 @@ static InterpretResult run(int baseFrame) {
           Value result;
           if (callMagicBinary(a, vm.magicMul, b, &result)) {
             push(result);
+          } else if (vm.frameCount == 0) {
+            return INTERPRET_RUNTIME_ERROR;
           } else {
             runtimeError("Operands must be numbers.");
             return INTERPRET_RUNTIME_ERROR;
@@ -1152,6 +1172,8 @@ static InterpretResult run(int baseFrame) {
           Value result;
           if (callMagicBinary(a, vm.magicDiv, b, &result)) {
             push(result);
+          } else if (vm.frameCount == 0) {
+            return INTERPRET_RUNTIME_ERROR;
           } else {
             runtimeError("Operands must be numbers.");
             return INTERPRET_RUNTIME_ERROR;
@@ -1170,6 +1192,8 @@ static InterpretResult run(int baseFrame) {
           Value result;
           if (callMagicBinary(a, vm.magicMod, b, &result)) {
             push(result);
+          } else if (vm.frameCount == 0) {
+            return INTERPRET_RUNTIME_ERROR;
           } else {
             runtimeError("Operands must be numbers.");
             return INTERPRET_RUNTIME_ERROR;
@@ -1188,6 +1212,8 @@ static InterpretResult run(int baseFrame) {
           Value result;
           if (callMagicUnary(operand, vm.magicNeg, &result)) {
             push(result);
+          } else if (vm.frameCount == 0) {
+            return INTERPRET_RUNTIME_ERROR;
           } else {
             runtimeError("Operand must be a number.");
             return INTERPRET_RUNTIME_ERROR;
@@ -1246,6 +1272,10 @@ static InterpretResult run(int baseFrame) {
         }
         ObjArray* argsArr = AS_ARRAY(argsVal);
         int argCount = argsArr->elements.count;
+        if (vm.stackTop + argCount > vm.stack + STACK_MAX) {
+          runtimeError("Stack overflow: too many spread arguments.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
         for (int i = 0; i < argCount; i++) {
           push(argsArr->elements.values[i]);
         }
@@ -1265,6 +1295,10 @@ static InterpretResult run(int baseFrame) {
         }
         ObjArray* argsArr = AS_ARRAY(argsVal);
         int argCount = argsArr->elements.count;
+        if (vm.stackTop + argCount > vm.stack + STACK_MAX) {
+          runtimeError("Stack overflow: too many spread arguments.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
         for (int i = 0; i < argCount; i++) {
           push(argsArr->elements.values[i]);
         }

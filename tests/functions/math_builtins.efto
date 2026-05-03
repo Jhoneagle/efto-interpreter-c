@@ -13,9 +13,9 @@ print math.min(3, 7);   // expect: 3
 print math.max(3, 7);   // expect: 7
 print math.pow(2, 10);  // expect: 1024
 
-// parseInt.
-print math.parseInt("42");    // expect: 42
-print math.parseInt("3.14");  // expect: 3.14
+// parseNumber.
+print math.parseNumber("42");    // expect: 42
+print math.parseNumber("3.14");  // expect: 3.14
 
 // random returns a number between 0 and 1.
 var r = math.random();
