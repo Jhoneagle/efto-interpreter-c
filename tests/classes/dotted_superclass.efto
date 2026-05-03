@@ -1,0 +1,48 @@
+// Class inheritance using dotted module access.
+import error;
+
+// Inherit from error.Error using dotted syntax.
+class AppError < error.Error {
+  init(code, message) {
+    super.init(message);
+    this.code = code;
+  }
+
+  __toString__() {
+    return "AppError(" + toString(this.code) + "): " + this.message;
+  }
+}
+
+// Create and use.
+var e = AppError(404, "not found");
+print e; // expect: AppError(404): not found
+print e.message; // expect: not found
+print e.code; // expect: 404
+
+// is checks work through inheritance chain.
+print e is AppError; // expect: true
+print e is error.Error; // expect: true
+print error.isError(e); // expect: true
+
+// Throw and catch.
+try {
+  throw AppError(500, "internal");
+} catch (err) {
+  print err; // expect: AppError(500): internal
+  print err is AppError; // expect: true
+  print err is error.Error; // expect: true
+}
+
+// Can also inherit from error subtypes.
+class ValidationError < error.ValueError {
+  init(field, message) {
+    super.init(message);
+    this.field = field;
+  }
+}
+
+var ve = ValidationError("email", "invalid format");
+print ve; // expect: ValidationError: invalid format
+print ve.field; // expect: email
+print ve is error.ValueError; // expect: true
+print ve is error.Error; // expect: true

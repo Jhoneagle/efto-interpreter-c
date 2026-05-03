@@ -34,9 +34,18 @@ static void classDeclaration() {
 
   if (match(TOKEN_LESS)) {
     consume(TOKEN_IDENTIFIER, "Expect superclass name.");
+    Token superclassName = parser.previous;
     namedVariable(parser.previous, false);
 
-    if (identifiersEqual(&className, &parser.previous)) {
+    bool isDotted = false;
+    while (match(TOKEN_DOT)) {
+      consume(TOKEN_IDENTIFIER, "Expect property name after '.'.");
+      uint8_t name = identifierConstant(&parser.previous);
+      emitBytes(OP_GET_PROPERTY, name);
+      isDotted = true;
+    }
+
+    if (!isDotted && identifiersEqual(&className, &superclassName)) {
       error("A class can't inherit from itself.");
     }
 

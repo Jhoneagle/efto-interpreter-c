@@ -939,6 +939,10 @@ static bool stringPadStart(Value receiver, int argCount, Value* args,
     *result = receiver;
     return true;
   }
+  if (targetLen > INT_MAX - 1) {
+    runtimeError("padStart() result too large.");
+    return false;
+  }
   int fillLen = targetLen - str->length;
   char* buffer = ALLOCATE(char, targetLen + 1);
   for (int i = 0; i < fillLen; i++) {
@@ -971,6 +975,10 @@ static bool stringPadEnd(Value receiver, int argCount, Value* args,
   if (targetLen <= str->length || padLen == 0) {
     *result = receiver;
     return true;
+  }
+  if (targetLen > INT_MAX - 1) {
+    runtimeError("padEnd() result too large.");
+    return false;
   }
   int fillLen = targetLen - str->length;
   char* buffer = ALLOCATE(char, targetLen + 1);
@@ -2051,8 +2059,13 @@ static Value collectionsRangeNative(int argCount, Value* args) {
     return NIL_VAL;
   }
 
-  int count = (int)ceil((end - start) / step);
-  if (count < 0) count = 0;
+  double countD = ceil((end - start) / step);
+  if (countD < 0) countD = 0;
+  if (countD > INT_MAX) {
+    runtimeError("range() produces too many elements.");
+    return NIL_VAL;
+  }
+  int count = (int)countD;
 
   ObjArray* arr = newArray();
   push(OBJ_VAL(arr)); // GC protect
