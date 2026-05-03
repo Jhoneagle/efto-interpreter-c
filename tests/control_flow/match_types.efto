@@ -1,0 +1,85 @@
+// Primitive type patterns.
+match (42) {
+    number n => print n;
+    _ => print "other";
+}
+// expect: 42
+
+match ("hello") {
+    number n => print "num";
+    string s => print s;
+    _ => print "other";
+}
+// expect: hello
+
+match (true) {
+    bool b => print b;
+    _ => print "other";
+}
+// expect: true
+
+match ([1, 2]) {
+    array a => print a;
+    _ => print "other";
+}
+// expect: [1, 2]
+
+match ({}) {
+    map m => print "is map";
+    _ => print "other";
+}
+// expect: is map
+
+// No match falls through.
+match ("test") {
+    number n => print "num";
+    _ => print "fallthrough";
+}
+// expect: fallthrough
+
+// Class type patterns.
+class Animal {
+    init(name) { this.name = name; }
+}
+class Dog < Animal {
+    init(name) { super.init(name); }
+}
+
+var d = Dog("Rex");
+
+// Exact class match.
+match (d) {
+    Dog dog => print dog.name;
+    _ => print "not dog";
+}
+// expect: Rex
+
+// Inheritance: Dog is also an Animal.
+match (d) {
+    Animal a => print a.name;
+    _ => print "not animal";
+}
+// expect: Rex
+
+// Order matters: more specific first.
+match (d) {
+    Dog dog => print "dog";
+    Animal a => print "animal";
+    _ => print "other";
+}
+// expect: dog
+
+// Existing literal patterns still work.
+var x = 10;
+match (x) {
+    10 => print "ten";
+    _ => print "other";
+}
+// expect: ten
+
+// Existing destructuring still works.
+match ([1, 2, 3]) {
+    [a, b, c] => print a + b + c;
+    _ => print "no match";
+}
+// expect: 6

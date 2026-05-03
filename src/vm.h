@@ -48,6 +48,17 @@ typedef struct {
   ObjString* initString;
   ObjString* lengthString;
   ObjString* sizeString;
+  ObjString* magicAdd;
+  ObjString* magicSub;
+  ObjString* magicMul;
+  ObjString* magicDiv;
+  ObjString* magicMod;
+  ObjString* magicNeg;
+  ObjString* magicEq;
+  ObjString* magicCmp;
+  ObjString* magicToString;
+  ObjString* magicToNumber;
+  ObjString* magicToBool;
   ObjClass* arrayMethods;
   ObjClass* fileMethods;
   ObjClass* mapMethods;
@@ -84,6 +95,9 @@ char* readFile(const char* path);
 void runtimeError(const char* format, ...);
 bool vmCallValue(Value callee, int argCount, Value* result);
 int getCallableArity(Value callee);
+bool callMagicBinary(Value left, ObjString* name,
+                     Value right, Value* result);
+bool callMagicUnary(Value operand, ObjString* name, Value* result);
 bool callValue(Value callee, int argCount);
 ObjString* stringify(Value value);
 

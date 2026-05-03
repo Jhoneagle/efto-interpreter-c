@@ -1,0 +1,29 @@
+class Scored {
+    init(name, score) { this.name = name; this.score = score; }
+    __cmp__(other) { return this.score - other.score; }
+    __toString__() { return this.name; }
+}
+
+var items = [Scored("c", 3), Scored("a", 1), Scored("b", 2)];
+items.sort();
+print items.join(", "); // expect: a, b, c
+
+// Reverse order.
+var items2 = [Scored("x", 10), Scored("y", 5), Scored("z", 1)];
+items2.sort();
+print items2.join(", "); // expect: z, y, x
+
+// Already sorted.
+var items3 = [Scored("p", 1), Scored("q", 2), Scored("r", 3)];
+items3.sort();
+print items3.join(", "); // expect: p, q, r
+
+// Single element.
+var items4 = [Scored("only", 42)];
+items4.sort();
+print items4.join(", "); // expect: only
+
+// Primitive sort still works.
+var nums = [3, 1, 4, 1, 5];
+nums.sort();
+print nums; // expect: [1, 1, 3, 4, 5]

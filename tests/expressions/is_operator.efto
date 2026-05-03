@@ -1,0 +1,38 @@
+// Primitive types.
+print (42 is number); // expect: true
+print ("hi" is string); // expect: true
+print (true is bool); // expect: true
+print ([1, 2] is array); // expect: true
+print ({} is map); // expect: true
+print (42 is string); // expect: false
+print ("hi" is number); // expect: false
+
+// Classes.
+class Animal {}
+class Dog < Animal {}
+var d = Dog();
+print (d is Dog); // expect: true
+print (d is Animal); // expect: true
+
+var a = Animal();
+print (a is Dog); // expect: false
+print (a is Animal); // expect: true
+
+// Dynamic — type in variable.
+var t = number;
+print (42 is t); // expect: true
+print ("hi" is t); // expect: false
+
+// In expressions.
+var x = 42;
+if (x is number) {
+    print "it's a number"; // expect: it's a number
+}
+
+// Negation with !
+print !(42 is string); // expect: true
+
+// Function type.
+fun greet() {}
+print (greet is function); // expect: true
+print (42 is function); // expect: false

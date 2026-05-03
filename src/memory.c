@@ -81,6 +81,7 @@ static void blackenObject(Obj* object) {
     case OBJ_ARRAY: {
       ObjArray* array = (ObjArray*)object;
       markArray(&array->elements);
+      if (array->elementType) markObject((Obj*)array->elementType);
       break;
     }
     case OBJ_BOUND_METHOD: {
@@ -104,11 +105,14 @@ static void blackenObject(Obj* object) {
     case OBJ_MAP: {
       ObjMap* map = (ObjMap*)object;
       markValueTable(&map->entries);
+      if (map->keyType) markObject((Obj*)map->keyType);
+      if (map->valueType) markObject((Obj*)map->valueType);
       break;
     }
     case OBJ_CLASS: {
       ObjClass* klass = (ObjClass*)object;
       markObject((Obj*)klass->name);
+      if (klass->superclass) markObject((Obj*)klass->superclass);
       markTable(&klass->methods);
       break;
     }
@@ -137,6 +141,13 @@ static void blackenObject(Obj* object) {
     case OBJ_UPVALUE:
       markValue(((ObjUpvalue*)object)->closed);
       break;
+    case OBJ_TYPE_DESCRIPTOR: {
+      ObjTypeDescriptor* desc = (ObjTypeDescriptor*)object;
+      markObject((Obj*)desc->name);
+      if (desc->classRef) markObject((Obj*)desc->classRef);
+      markValue(desc->validatorFn);
+      break;
+    }
     case OBJ_NATIVE:
     case OBJ_NATIVE_METHOD:
     case OBJ_STRING:
@@ -210,6 +221,9 @@ static void freeObject(Obj* object) {
     case OBJ_NATIVE_METHOD:
       FREE(ObjNativeMethod, object);
       break;
+    case OBJ_TYPE_DESCRIPTOR:
+      FREE(ObjTypeDescriptor, object);
+      break;
     case OBJ_UPVALUE:
       FREE(ObjUpvalue, object);
       break;
@@ -254,6 +268,17 @@ static void markRoots() {
   markObject((Obj*)vm.initString);
   markObject((Obj*)vm.lengthString);
   markObject((Obj*)vm.sizeString);
+  markObject((Obj*)vm.magicAdd);
+  markObject((Obj*)vm.magicSub);
+  markObject((Obj*)vm.magicMul);
+  markObject((Obj*)vm.magicDiv);
+  markObject((Obj*)vm.magicMod);
+  markObject((Obj*)vm.magicNeg);
+  markObject((Obj*)vm.magicEq);
+  markObject((Obj*)vm.magicCmp);
+  markObject((Obj*)vm.magicToString);
+  markObject((Obj*)vm.magicToNumber);
+  markObject((Obj*)vm.magicToBool);
   markObject((Obj*)vm.arrayMethods);
   markObject((Obj*)vm.fileMethods);
   markObject((Obj*)vm.mapMethods);

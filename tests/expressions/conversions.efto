@@ -1,0 +1,35 @@
+// toString
+print toString(42); // expect: 42
+print toString(true); // expect: true
+print toString(nil); // expect: nil
+
+// toNumber
+print toNumber(42); // expect: 42
+print toNumber("3.14"); // expect: 3.14
+print toNumber(true); // expect: 1
+print toNumber(false); // expect: 0
+print toNumber(nil); // expect: 0
+
+// toBool
+print toBool(true); // expect: true
+print toBool(false); // expect: false
+print toBool(nil); // expect: false
+print toBool(0); // expect: true
+print toBool(1); // expect: true
+print toBool("hello"); // expect: true
+
+// Magic conversion methods.
+class Temp {
+    init(celsius) { this.celsius = celsius; }
+    __toNumber__() { return this.celsius; }
+    __toBool__() { return this.celsius > 0; }
+    __toString__() { return "${this.celsius}C"; }
+}
+
+var t = Temp(100);
+print toString(t); // expect: 100C
+print toNumber(t); // expect: 100
+print toBool(t); // expect: true
+
+var cold = Temp(-5);
+print toBool(cold); // expect: false

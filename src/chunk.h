@@ -63,6 +63,7 @@ typedef enum {
   OP_SPREAD_ARRAY,
   OP_CALL_SPREAD,
   OP_INVOKE_SPREAD,
+  OP_CHECK_TYPE,
 } OpCode;
 
 typedef struct {

@@ -1,0 +1,12 @@
+// Typed map accepts correct key/value types.
+var lookup = Map(string, number);
+lookup["age"] = 25;
+lookup["score"] = 100;
+print lookup["age"]; // expect: 25
+print lookup["score"]; // expect: 100
+
+// Unguarded Map() works like {}.
+var plain = Map();
+plain["key"] = 42;
+plain[1] = "mixed";
+print plain["key"]; // expect: 42

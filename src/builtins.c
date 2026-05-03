@@ -16,11 +16,41 @@ static Value clockNative(int argCount, Value* args) {
   return NUMBER_VAL((double)clock() / CLOCKS_PER_SEC);
 }
 
+// --- Type guard helpers ---
+
+static bool checkArrayTypeGuard(ObjArray* array, Value value) {
+  if (array->elementType == NULL) return true;
+  if (valueMatchesTypeDescriptor(value, array->elementType)) return true;
+  ObjString* actual = typeOfValue(value);
+  runtimeError("Type error: array expects %s but got %s.",
+               array->elementType->name->chars, actual->chars);
+  return false;
+}
+
+static bool checkMapKeyGuard(ObjMap* map, Value key) {
+  if (map->keyType == NULL) return true;
+  if (valueMatchesTypeDescriptor(key, map->keyType)) return true;
+  ObjString* actual = typeOfValue(key);
+  runtimeError("Type error: map key expects %s but got %s.",
+               map->keyType->name->chars, actual->chars);
+  return false;
+}
+
+static bool checkMapValueGuard(ObjMap* map, Value value) {
+  if (map->valueType == NULL) return true;
+  if (valueMatchesTypeDescriptor(value, map->valueType)) return true;
+  ObjString* actual = typeOfValue(value);
+  runtimeError("Type error: map value expects %s but got %s.",
+               map->valueType->name->chars, actual->chars);
+  return false;
+}
+
 // --- Array native methods ---
 
 static bool arrayPush(Value receiver, int argCount, Value* args,
                       Value* result) {
   ObjArray* array = AS_ARRAY(receiver);
+  if (!checkArrayTypeGuard(array, args[0])) return false;
   writeValueArray(&array->elements, args[0]);
   *result = NIL_VAL;
   return true;
@@ -98,31 +128,90 @@ static int sortCompare(const void* a, const void* b) {
   }
 }
 
+static bool needsMagicSort(ObjArray* array) {
+  int i;
+  for (i = 0; i < array->elements.count; i++) {
+    Value v = array->elements.values[i];
+    if (IS_INSTANCE(v)) {
+      Value method;
+      if (tableGet(&AS_INSTANCE(v)->klass->methods,
+                   vm.magicCmp, &method)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 static bool arraySort(Value receiver, int argCount, Value* args,
                       Value* result) {
   ObjArray* array = AS_ARRAY(receiver);
 
-  // Validate all elements are sortable primitives.
-  for (int i = 0; i < array->elements.count; i++) {
-    Value v = array->elements.values[i];
-    if (sortTypeOrdinal(v) >= 4) {
-      const char* typeName = "unknown";
-      if (IS_OBJ(v)) {
-        switch (OBJ_TYPE(v)) {
-          case OBJ_ARRAY: typeName = "array"; break;
-          case OBJ_MAP: typeName = "map"; break;
-          case OBJ_CLASS: typeName = "class"; break;
-          case OBJ_INSTANCE: typeName = "instance"; break;
-          case OBJ_FUNCTION: case OBJ_CLOSURE:
-          case OBJ_NATIVE: case OBJ_NATIVE_METHOD:
-            typeName = "function"; break;
-          case OBJ_FILE: typeName = "file"; break;
-          case OBJ_MODULE: typeName = "module"; break;
-          default: break;
+  if (needsMagicSort(array)) {
+    // Insertion sort with __cmp__ dispatch.
+    int i;
+    push(receiver); // GC protect — stack: [receiver]
+    for (i = 1; i < AS_ARRAY(vm.stackTop[-1])->elements.count; i++) {
+      ObjArray* arr = AS_ARRAY(vm.stackTop[-1]);
+      Value key = arr->elements.values[i];
+      push(key); // GC protect key — stack: [receiver, key]
+      int j = i - 1;
+      while (j >= 0) {
+        arr = AS_ARRAY(vm.stackTop[-2]);
+        Value left = arr->elements.values[j];
+        Value keyVal = vm.stackTop[-1];
+        int cmp;
+        Value cmpResult;
+        if (IS_INSTANCE(left) &&
+            callMagicBinary(left, vm.magicCmp, keyVal, &cmpResult)) {
+          if (!IS_NUMBER(cmpResult)) {
+            pop(); pop();
+            runtimeError("__cmp__ must return a number.");
+            return false;
+          }
+          double d = AS_NUMBER(cmpResult);
+          cmp = (d < 0) ? -1 : (d > 0) ? 1 : 0;
+        } else {
+          cmp = sortCompare(&left, &keyVal);
         }
+        if (cmp <= 0) break;
+        arr = AS_ARRAY(vm.stackTop[-2]);
+        arr->elements.values[j + 1] = arr->elements.values[j];
+        j--;
       }
-      runtimeError("Cannot compare values of type '%s'.", typeName);
-      return false;
+      arr = AS_ARRAY(vm.stackTop[-2]);
+      arr->elements.values[j + 1] = vm.stackTop[-1];
+      pop(); // key
+    }
+    pop(); // receiver
+    *result = receiver;
+    return true;
+  }
+
+  // Fast path: validate all elements are sortable primitives.
+  {
+    int i;
+    for (i = 0; i < array->elements.count; i++) {
+      Value v = array->elements.values[i];
+      if (sortTypeOrdinal(v) >= 4) {
+        const char* typeName = "unknown";
+        if (IS_OBJ(v)) {
+          switch (OBJ_TYPE(v)) {
+            case OBJ_ARRAY: typeName = "array"; break;
+            case OBJ_MAP: typeName = "map"; break;
+            case OBJ_CLASS: typeName = "class"; break;
+            case OBJ_INSTANCE: typeName = "instance"; break;
+            case OBJ_FUNCTION: case OBJ_CLOSURE:
+            case OBJ_NATIVE: case OBJ_NATIVE_METHOD:
+              typeName = "function"; break;
+            case OBJ_FILE: typeName = "file"; break;
+            case OBJ_MODULE: typeName = "module"; break;
+            default: break;
+          }
+        }
+        runtimeError("Cannot compare values of type '%s'.", typeName);
+        return false;
+      }
     }
   }
 
@@ -1120,6 +1209,7 @@ ObjString* typeOfValue(Value value) {
       case OBJ_NATIVE:
       case OBJ_NATIVE_METHOD:
       case OBJ_BOUND_METHOD:  return copyString("function", 8);
+      case OBJ_TYPE_DESCRIPTOR: return copyString("type", 4);
       default: break;
     }
   }
@@ -1129,6 +1219,56 @@ ObjString* typeOfValue(Value value) {
 static Value typeNative(int argCount, Value* args) {
   if (argCount == 0) return OBJ_VAL(typeOfValue(NIL_VAL));
   return OBJ_VAL(typeOfValue(args[0]));
+}
+
+static Value toStringNative(int argCount, Value* args) {
+  if (argCount != 1) {
+    runtimeError("toString() expects 1 argument.");
+    return NIL_VAL;
+  }
+  return OBJ_VAL(stringify(args[0]));
+}
+
+static Value toNumberNative(int argCount, Value* args) {
+  if (argCount != 1) {
+    runtimeError("toNumber() expects 1 argument.");
+    return NIL_VAL;
+  }
+  Value v = args[0];
+  if (IS_NUMBER(v)) return v;
+  if (IS_BOOL(v)) return NUMBER_VAL(AS_BOOL(v) ? 1.0 : 0.0);
+  if (IS_NIL(v)) return NUMBER_VAL(0.0);
+  if (IS_STRING(v)) {
+    char* end;
+    double d = strtod(AS_CSTRING(v), &end);
+    if (end == AS_CSTRING(v)) {
+      runtimeError("Cannot convert '%s' to number.", AS_CSTRING(v));
+      return NIL_VAL;
+    }
+    return NUMBER_VAL(d);
+  }
+  if (IS_INSTANCE(v)) {
+    Value result;
+    if (callMagicUnary(v, vm.magicToNumber, &result)) return result;
+  }
+  runtimeError("Cannot convert to number.");
+  return NIL_VAL;
+}
+
+static Value toBoolNative(int argCount, Value* args) {
+  if (argCount != 1) {
+    runtimeError("toBool() expects 1 argument.");
+    return NIL_VAL;
+  }
+  Value v = args[0];
+  if (IS_BOOL(v)) return v;
+  if (IS_NIL(v)) return BOOL_VAL(false);
+  if (IS_INSTANCE(v)) {
+    Value result;
+    if (callMagicUnary(v, vm.magicToBool, &result)) return result;
+  }
+  // Everything else is truthy (numbers, strings, arrays, etc.)
+  return BOOL_VAL(true);
 }
 
 static Value sqrtNative(int argCount, Value* args) {
@@ -1432,6 +1572,74 @@ static Value ioOpenNative(int argCount, Value* args) {
 
 // --- Registration helpers ---
 
+static Value typeDescriptorNative(int argCount, Value* args) {
+  if (argCount != 2) {
+    runtimeError("TypeDescriptor() expects 2 arguments: name and validator.");
+    return NIL_VAL;
+  }
+  if (!IS_STRING(args[0])) {
+    runtimeError("TypeDescriptor name must be a string.");
+    return NIL_VAL;
+  }
+  if (!IS_CLOSURE(args[1]) && !IS_NATIVE(args[1]) &&
+      !IS_BOUND_METHOD(args[1])) {
+    runtimeError("TypeDescriptor validator must be a function.");
+    return NIL_VAL;
+  }
+  ObjString* name = AS_STRING(args[0]);
+  push(args[0]); push(args[1]);
+  ObjTypeDescriptor* desc = newCustomTypeDescriptor(name, args[1]);
+  pop(); pop();
+  return OBJ_VAL(desc);
+}
+
+static ObjTypeDescriptor* resolveTypeArg(Value arg) {
+  if (IS_TYPE_DESCRIPTOR(arg)) return AS_TYPE_DESCRIPTOR(arg);
+  if (IS_CLASS(arg)) {
+    ObjClass* klass = AS_CLASS(arg);
+    push(arg); // GC protect
+    ObjTypeDescriptor* desc = newTypeDescriptor(
+        TYPETAG_CLASS_REF, klass->name, klass);
+    pop();
+    return desc;
+  }
+  return NULL;
+}
+
+static Value arrayConstructorNative(int argCount, Value* args) {
+  if (argCount == 0) return OBJ_VAL(newArray());
+  if (argCount == 1) {
+    ObjTypeDescriptor* desc = resolveTypeArg(args[0]);
+    if (desc == NULL) {
+      runtimeError("Array() argument must be a type or class.");
+      return NIL_VAL;
+    }
+    ObjArray* array = newArray();
+    array->elementType = desc;
+    return OBJ_VAL(array);
+  }
+  runtimeError("Array() expects 0 or 1 arguments.");
+  return NIL_VAL;
+}
+
+static Value mapConstructorNative(int argCount, Value* args) {
+  if (argCount == 0) return OBJ_VAL(newMap());
+  if (argCount == 2) {
+    ObjTypeDescriptor* kDesc = resolveTypeArg(args[0]);
+    ObjTypeDescriptor* vDesc = resolveTypeArg(args[1]);
+    if (kDesc == NULL || vDesc == NULL) {
+      runtimeError("Map() arguments must be types or classes.");
+      return NIL_VAL;
+    }
+    ObjMap* map = newMap();
+    map->keyType = kDesc;
+    map->valueType = vDesc;
+    return OBJ_VAL(map);
+  }
+  runtimeError("Map() expects 0 or 2 arguments.");
+  return NIL_VAL;
+}
+
 static void defineNative(const char* name, NativeFn function) {
   push(OBJ_VAL(copyString(name, (int)strlen(name))));
   push(OBJ_VAL(newNative(function)));
@@ -1542,6 +1750,33 @@ void registerBuiltins(void) {
   defineNativeMethod(vm.stringMethods, "charAt", stringCharAt, 1);
 
   defineNative("type", typeNative);
+  defineNative("TypeDescriptor", typeDescriptorNative);
+  defineNative("Array", arrayConstructorNative);
+  defineNative("Map", mapConstructorNative);
+  defineNative("toString", toStringNative);
+  defineNative("toNumber", toNumberNative);
+  defineNative("toBool", toBoolNative);
+
+  // Register primitive type descriptors as globals.
+  // Note: nil/true/false are keywords so they can't be identifiers.
+  {
+    const char* typeNames[] = {
+      "number", "string", "bool", "array", "map", "function"
+    };
+    int typeLens[] = {6, 6, 4, 5, 3, 8};
+    TypeTag typeTags[] = {
+      TYPETAG_NUMBER, TYPETAG_STRING, TYPETAG_BOOL, TYPETAG_ARRAY, TYPETAG_MAP, TYPETAG_FUNCTION
+    };
+    int i;
+    for (i = 0; i < 6; i++) {
+      ObjString* tname = copyString(typeNames[i], typeLens[i]);
+      push(OBJ_VAL(tname));
+      ObjTypeDescriptor* desc = newTypeDescriptor(typeTags[i], tname, NULL);
+      push(OBJ_VAL(desc));
+      tableSet(&vm.globals, tname, OBJ_VAL(desc));
+      pop(); pop();
+    }
+  }
 
   // Built-in 'math' module.
   ObjModule* mathModule = registerBuiltinModule("math");

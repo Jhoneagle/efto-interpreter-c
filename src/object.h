@@ -12,6 +12,7 @@
 #define OBJ_TYPE(value)        (AS_OBJ(value)->type)
 
 #define IS_ARRAY(value)        isObjType(value, OBJ_ARRAY)
+#define IS_TYPE_DESCRIPTOR(value) isObjType(value, OBJ_TYPE_DESCRIPTOR)
 #define IS_FILE(value)         isObjType(value, OBJ_FILE)
 #define IS_MAP(value)          isObjType(value, OBJ_MAP)
 #define IS_MODULE(value)       isObjType(value, OBJ_MODULE)
@@ -25,6 +26,7 @@
 #define IS_STRING(value)       isObjType(value, OBJ_STRING)
 
 #define AS_ARRAY(value)        ((ObjArray*)AS_OBJ(value))
+#define AS_TYPE_DESCRIPTOR(value) ((ObjTypeDescriptor*)AS_OBJ(value))
 #define AS_FILE(value)         ((ObjFile*)AS_OBJ(value))
 #define AS_MAP(value)          ((ObjMap*)AS_OBJ(value))
 #define AS_MODULE(value)       ((ObjModule*)AS_OBJ(value))
@@ -51,9 +53,25 @@ typedef enum {
   OBJ_MAP,
   OBJ_NATIVE,
   OBJ_NATIVE_METHOD,
+  OBJ_TYPE_DESCRIPTOR,
   OBJ_UPVALUE,
   OBJ_STRING,
 } ObjType;
+
+typedef enum {
+  TYPETAG_ANY = 0,
+  TYPETAG_NUMBER,
+  TYPETAG_STRING,
+  TYPETAG_BOOL,
+  TYPETAG_NIL,
+  TYPETAG_ARRAY,
+  TYPETAG_MAP,
+  TYPETAG_FUNCTION,
+  TYPETAG_CLASS_REF,
+  TYPETAG_CUSTOM,
+} TypeTag;
+
+typedef struct ObjTypeDescriptor ObjTypeDescriptor;
 
 struct Obj {
   ObjType type;
@@ -64,11 +82,14 @@ struct Obj {
 typedef struct {
   Obj obj;
   ValueArray elements;
+  ObjTypeDescriptor* elementType;
 } ObjArray;
 
 typedef struct {
   Obj obj;
   ValueTable entries;
+  ObjTypeDescriptor* keyType;
+  ObjTypeDescriptor* valueType;
 } ObjMap;
 
 typedef struct {
@@ -136,9 +157,10 @@ typedef struct {
   Obj* globalsOwner;
 } ObjClosure;
 
-typedef struct {
+typedef struct ObjClass {
   Obj obj;
   ObjString* name;
+  struct ObjClass* superclass;
   Table methods;
 } ObjClass;
 
@@ -154,6 +176,14 @@ typedef struct {
   ObjClosure* method;
 } ObjBoundMethod;
 
+struct ObjTypeDescriptor {
+  Obj obj;
+  TypeTag tag;
+  ObjClass* classRef;
+  ObjString* name;
+  Value validatorFn;
+};
+
 ObjArray* newArray();
 ObjFile* newFile(FILE* file, ObjString* path, ObjString* mode);
 ObjMap* newMap();
@@ -167,8 +197,13 @@ ObjInstance* newInstance(ObjClass* klass);
 ObjNative* newNative(NativeFn function);
 ObjNativeMethod* newNativeMethod(NativeMethodFn function, int arity);
 ObjUpvalue* newUpvalue(Value* slot);
+ObjTypeDescriptor* newTypeDescriptor(TypeTag tag, ObjString* name,
+                                     ObjClass* classRef);
+ObjTypeDescriptor* newCustomTypeDescriptor(ObjString* name,
+                                           Value validatorFn);
 ObjString* takeString(char* chars, int length);
 ObjString* copyString(const char* chars, int length);
+bool valueMatchesTypeDescriptor(Value value, ObjTypeDescriptor* desc);
 void printObject(Value value);
 
 static inline bool isObjType(Value value, ObjType type) {

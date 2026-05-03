@@ -1,0 +1,45 @@
+class Vec2 {
+    init(x, y) { this.x = x; this.y = y; }
+    __add__(other) { return Vec2(this.x + other.x, this.y + other.y); }
+    __sub__(other) { return Vec2(this.x - other.x, this.y - other.y); }
+    __mul__(other) { return Vec2(this.x * other.x, this.y * other.y); }
+    __div__(other) { return Vec2(this.x / other.x, this.y / other.y); }
+    __mod__(other) { return Vec2(this.x % other.x, this.y % other.y); }
+    __neg__() { return Vec2(-this.x, -this.y); }
+    __eq__(other) { return this.x == other.x and this.y == other.y; }
+    __cmp__(other) {
+        var magA = this.x * this.x + this.y * this.y;
+        var magB = other.x * other.x + other.y * other.y;
+        if (magA < magB) return -1;
+        if (magA > magB) return 1;
+        return 0;
+    }
+    __toString__() { return "Vec2(${this.x}, ${this.y})"; }
+}
+
+// Primitives still work.
+print 1 + 2; // expect: 3
+print "a" + "b"; // expect: ab
+print 10 - 3; // expect: 7
+print 4 * 5; // expect: 20
+print 10 / 2; // expect: 5
+print 7 % 3; // expect: 1
+print -42; // expect: -42
+print 3 > 2; // expect: true
+print 1 < 2; // expect: true
+print 1 == 1; // expect: true
+
+// Magic methods.
+var a = Vec2(1, 2);
+var b = Vec2(3, 4);
+print a + b; // expect: Vec2(4, 6)
+print a - b; // expect: Vec2(-2, -2)
+print a * b; // expect: Vec2(3, 8)
+print Vec2(6, 8) / Vec2(3, 4); // expect: Vec2(2, 2)
+print Vec2(7, 9) % Vec2(3, 4); // expect: Vec2(1, 1)
+print -a; // expect: Vec2(-1, -2)
+print a == Vec2(1, 2); // expect: true
+print a == b; // expect: false
+print a < b; // expect: true
+print b > a; // expect: true
+print a; // expect: Vec2(1, 2)

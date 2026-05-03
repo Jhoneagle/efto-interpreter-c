@@ -692,6 +692,45 @@ static void matchStatement() {
         addLocal(varNames[i]);
         markInitialized();
       }
+    } else if (check(TOKEN_IDENTIFIER)) {
+      // Could be type pattern (TypeName binding =>) or literal.
+      ScannerState savedScan = saveScannerState();
+      Token savedCurrent = parser.current;
+      Token savedPrevious = parser.previous;
+
+      Token typeName = parser.current;
+      advance(); // consume potential type name
+
+      if (check(TOKEN_IDENTIFIER)) {
+        // Confirmed: TypeName binding pattern.
+        Token bindingName = parser.current;
+        advance();
+
+        // Push scrutinee, push type/class, check.
+        emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+        namedVariable(typeName, false);
+        emitByte(OP_CHECK_TYPE);
+        skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
+        emitByte(OP_POP); // pop true
+
+        // Bind variable.
+        beginScope();
+        hasBindingScope = true;
+        emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+        addLocal(bindingName);
+        markInitialized();
+      } else {
+        // Not a type pattern — restore and parse as literal.
+        parser.current = savedCurrent;
+        parser.previous = savedPrevious;
+        restoreScannerState(savedScan);
+
+        emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+        expression();
+        emitByte(OP_EQUAL);
+        skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
+        emitByte(OP_POP); // pop true
+      }
     } else {
       // Literal pattern: number, string, true, false, nil.
       emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);

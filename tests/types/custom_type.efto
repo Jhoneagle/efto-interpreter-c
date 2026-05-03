@@ -1,0 +1,46 @@
+// Custom type descriptor with validator.
+var Positive = TypeDescriptor("Positive", (val) => {
+    return val is number and val > 0;
+});
+
+print (42 is Positive); // expect: true
+print (-1 is Positive); // expect: false
+print ("hi" is Positive); // expect: false
+print (0 is Positive); // expect: false
+
+// Use with typed array.
+var nums = Array(Positive);
+nums.push(1);
+nums.push(2);
+print nums.length; // expect: 2
+
+// Custom string type.
+var NonEmpty = TypeDescriptor("NonEmpty", (val) => {
+    return val is string and val.length > 0;
+});
+print ("hello" is NonEmpty); // expect: true
+print ("" is NonEmpty); // expect: false
+print (42 is NonEmpty); // expect: false
+
+// Composable types.
+var EvenPositive = TypeDescriptor("EvenPositive", (val) => {
+    return val is Positive and val % 2 == 0;
+});
+print (4 is EvenPositive); // expect: true
+print (3 is EvenPositive); // expect: false
+print (-2 is EvenPositive); // expect: false
+
+// Use in match.
+var x = 42;
+match (x) {
+    Positive p => print "positive";
+    _ => print "other";
+}
+// expect: positive
+
+var y = -5;
+match (y) {
+    Positive p => print "positive";
+    _ => print "other";
+}
+// expect: other

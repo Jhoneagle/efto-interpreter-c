@@ -201,6 +201,8 @@ int disassembleInstruction(Chunk* chunk, int offset) {
       return simpleInstruction("OP_CALL_SPREAD", offset);
     case OP_INVOKE_SPREAD:
       return constantInstruction("OP_INVOKE_SPREAD", chunk, offset);
+    case OP_CHECK_TYPE:
+      return simpleInstruction("OP_CHECK_TYPE", offset);
     default:
       printf("Unknown opcode %d\n", instruction);
       return offset + 1;

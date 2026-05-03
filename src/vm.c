@@ -111,7 +111,25 @@ ObjString* stringify(Value value) {
         return AS_FILE(value)->path;
       case OBJ_MODULE:
         return AS_MODULE(value)->name;
+      case OBJ_TYPE_DESCRIPTOR: {
+        ObjTypeDescriptor* desc = AS_TYPE_DESCRIPTOR(value);
+        int totalLen = desc->name->length + 7;
+        char* chars = ALLOCATE(char, totalLen + 1);
+        memcpy(chars, "<type ", 6);
+        memcpy(chars + 6, desc->name->chars, desc->name->length);
+        chars[totalLen - 1] = '>';
+        chars[totalLen] = '\0';
+        return takeString(chars, totalLen);
+      }
       case OBJ_INSTANCE: {
+        Value toStrMethod;
+        if (tableGet(&AS_INSTANCE(value)->klass->methods,
+                     vm.magicToString, &toStrMethod)) {
+          Value strResult;
+          if (callMagicUnary(value, vm.magicToString, &strResult)) {
+            if (IS_STRING(strResult)) return AS_STRING(strResult);
+          }
+        }
         ObjString* name = AS_INSTANCE(value)->klass->name;
         int totalLen = name->length + 9;
         char* chars = ALLOCATE(char, totalLen + 1);
@@ -225,6 +243,29 @@ void initVM() {
     vm.sizeString = NULL;
     vm.sizeString = copyString("size", 4);
 
+    vm.magicAdd = NULL;
+    vm.magicAdd = copyString("__add__", 7);
+    vm.magicSub = NULL;
+    vm.magicSub = copyString("__sub__", 7);
+    vm.magicMul = NULL;
+    vm.magicMul = copyString("__mul__", 7);
+    vm.magicDiv = NULL;
+    vm.magicDiv = copyString("__div__", 7);
+    vm.magicMod = NULL;
+    vm.magicMod = copyString("__mod__", 7);
+    vm.magicNeg = NULL;
+    vm.magicNeg = copyString("__neg__", 7);
+    vm.magicEq = NULL;
+    vm.magicEq = copyString("__eq__", 6);
+    vm.magicCmp = NULL;
+    vm.magicCmp = copyString("__cmp__", 7);
+    vm.magicToString = NULL;
+    vm.magicToString = copyString("__toString__", 12);
+    vm.magicToNumber = NULL;
+    vm.magicToNumber = copyString("__toNumber__", 12);
+    vm.magicToBool = NULL;
+    vm.magicToBool = copyString("__toBool__", 10);
+
     registerBuiltins();
 }
 
@@ -235,6 +276,17 @@ void freeVM() {
   vm.initString = NULL;
   vm.lengthString = NULL;
   vm.sizeString = NULL;
+  vm.magicAdd = NULL;
+  vm.magicSub = NULL;
+  vm.magicMul = NULL;
+  vm.magicDiv = NULL;
+  vm.magicMod = NULL;
+  vm.magicNeg = NULL;
+  vm.magicEq = NULL;
+  vm.magicCmp = NULL;
+  vm.magicToString = NULL;
+  vm.magicToNumber = NULL;
+  vm.magicToBool = NULL;
   freeObjects();
 }
 
@@ -380,6 +432,51 @@ int getCallableArity(Value callee) {
     }
   }
   return -1;
+}
+
+// --- Magic method dispatch helpers (zero-allocation) ---
+
+static bool lookupMagicMethod(Value value, ObjString* methodName,
+                              Value* method) {
+  if (!IS_INSTANCE(value)) return false;
+  return tableGet(&AS_INSTANCE(value)->klass->methods,
+                  methodName, method);
+}
+
+bool callMagicBinary(Value left, ObjString* name,
+                     Value right, Value* result) {
+  Value method;
+  if (!lookupMagicMethod(left, name, &method)) return false;
+  push(left);
+  push(right);
+  int framesBefore = vm.frameCount;
+  if (!call(AS_CLOSURE(method), 1)) {
+    pop(); pop();
+    return false;
+  }
+  if (vm.frameCount > framesBefore) {
+    InterpretResult r = run(framesBefore);
+    if (r != INTERPRET_OK) return false;
+  }
+  *result = pop();
+  return true;
+}
+
+bool callMagicUnary(Value operand, ObjString* name, Value* result) {
+  Value method;
+  if (!lookupMagicMethod(operand, name, &method)) return false;
+  push(operand);
+  int framesBefore = vm.frameCount;
+  if (!call(AS_CLOSURE(method), 0)) {
+    pop();
+    return false;
+  }
+  if (vm.frameCount > framesBefore) {
+    InterpretResult r = run(framesBefore);
+    if (r != INTERPRET_OK) return false;
+  }
+  *result = pop();
+  return true;
 }
 
 static bool invokeFromClass(ObjClass* klass, ObjString* name, int argCount) {
@@ -668,9 +765,30 @@ static bool executeIndexSet(void) {
       return false;
     }
 
+    if (array->elementType != NULL &&
+        !valueMatchesTypeDescriptor(value, array->elementType)) {
+      ObjString* actual = typeOfValue(value);
+      runtimeError("Type error: array expects %s but got %s.",
+                   array->elementType->name->chars, actual->chars);
+      return false;
+    }
     array->elements.values[i] = value;
   } else if (IS_MAP(receiver)) {
     ObjMap* map = AS_MAP(receiver);
+    if (map->keyType != NULL &&
+        !valueMatchesTypeDescriptor(index, map->keyType)) {
+      ObjString* actual = typeOfValue(index);
+      runtimeError("Type error: map key expects %s but got %s.",
+                   map->keyType->name->chars, actual->chars);
+      return false;
+    }
+    if (map->valueType != NULL &&
+        !valueMatchesTypeDescriptor(value, map->valueType)) {
+      ObjString* actual = typeOfValue(value);
+      runtimeError("Type error: map value expects %s but got %s.",
+                   map->valueType->name->chars, actual->chars);
+      return false;
+    }
     valueTableSet(&map->entries, index, value);
   } else {
     runtimeError("Only arrays and maps support index assignment.");
@@ -809,17 +927,6 @@ static InterpretResult run(int baseFrame) {
 
   #define READ_STRING() AS_STRING(READ_CONSTANT())
 
-  #define BINARY_OP(valueType, op) \
-    do { \
-      if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) { \
-        runtimeError("Operands must be numbers."); \
-        return INTERPRET_RUNTIME_ERROR; \
-      } \
-      double b = AS_NUMBER(pop()); \
-      double a = AS_NUMBER(pop()); \
-      push(valueType(a op b)); \
-    } while (false)
-
   for (;;) {
     #ifdef DEBUG_TRACE_EXECUTION
     printf("          ");
@@ -920,11 +1027,63 @@ static InterpretResult run(int baseFrame) {
       case OP_EQUAL: {
         Value b = pop();
         Value a = pop();
-        push(BOOL_VAL(valuesEqual(a, b)));
+        if (valuesEqual(a, b)) {
+          push(BOOL_VAL(true));
+        } else {
+          Value result;
+          if (callMagicBinary(a, vm.magicEq, b, &result)) {
+            push(BOOL_VAL(!IS_NIL(result) &&
+                 !(IS_BOOL(result) && !AS_BOOL(result))));
+          } else {
+            push(BOOL_VAL(false));
+          }
+        }
         break;
       }
-      case OP_GREATER:  BINARY_OP(BOOL_VAL, >); break;
-      case OP_LESS:     BINARY_OP(BOOL_VAL, <); break;
+      case OP_GREATER: {
+        if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
+          double b = AS_NUMBER(pop());
+          double a = AS_NUMBER(pop());
+          push(BOOL_VAL(a > b));
+        } else {
+          Value b = pop();
+          Value a = pop();
+          Value result;
+          if (callMagicBinary(a, vm.magicCmp, b, &result)) {
+            if (!IS_NUMBER(result)) {
+              runtimeError("__cmp__ must return a number.");
+              return INTERPRET_RUNTIME_ERROR;
+            }
+            push(BOOL_VAL(AS_NUMBER(result) > 0));
+          } else {
+            runtimeError("Operands must be numbers.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
+        }
+        break;
+      }
+      case OP_LESS: {
+        if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
+          double b = AS_NUMBER(pop());
+          double a = AS_NUMBER(pop());
+          push(BOOL_VAL(a < b));
+        } else {
+          Value b = pop();
+          Value a = pop();
+          Value result;
+          if (callMagicBinary(a, vm.magicCmp, b, &result)) {
+            if (!IS_NUMBER(result)) {
+              runtimeError("__cmp__ must return a number.");
+              return INTERPRET_RUNTIME_ERROR;
+            }
+            push(BOOL_VAL(AS_NUMBER(result) < 0));
+          } else {
+            runtimeError("Operands must be numbers.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
+        }
+        break;
+      }
       case OP_ADD: {
         if (IS_STRING(peek(0)) && IS_STRING(peek(1))) {
           concatenate();
@@ -933,35 +1092,109 @@ static InterpretResult run(int baseFrame) {
           double a = AS_NUMBER(pop());
           push(NUMBER_VAL(a + b));
         } else {
-          runtimeError(
-              "Operands must be two numbers or two strings.");
-          return INTERPRET_RUNTIME_ERROR;
+          Value b = pop();
+          Value a = pop();
+          Value result;
+          if (callMagicBinary(a, vm.magicAdd, b, &result)) {
+            push(result);
+          } else {
+            runtimeError(
+                "Operands must be two numbers or two strings.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
         }
         break;
       }
-      case OP_SUBTRACT: BINARY_OP(NUMBER_VAL, -); break;
-      case OP_MULTIPLY: BINARY_OP(NUMBER_VAL, *); break;
-      case OP_DIVIDE:   BINARY_OP(NUMBER_VAL, /); break;
-      case OP_MODULO: {
-        if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) {
-          runtimeError("Operands must be numbers.");
-          return INTERPRET_RUNTIME_ERROR;
+      case OP_SUBTRACT: {
+        if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
+          double b = AS_NUMBER(pop());
+          double a = AS_NUMBER(pop());
+          push(NUMBER_VAL(a - b));
+        } else {
+          Value b = pop();
+          Value a = pop();
+          Value result;
+          if (callMagicBinary(a, vm.magicSub, b, &result)) {
+            push(result);
+          } else {
+            runtimeError("Operands must be numbers.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
         }
-        double b = AS_NUMBER(pop());
-        double a = AS_NUMBER(pop());
-        push(NUMBER_VAL(fmod(a, b)));
+        break;
+      }
+      case OP_MULTIPLY: {
+        if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
+          double b = AS_NUMBER(pop());
+          double a = AS_NUMBER(pop());
+          push(NUMBER_VAL(a * b));
+        } else {
+          Value b = pop();
+          Value a = pop();
+          Value result;
+          if (callMagicBinary(a, vm.magicMul, b, &result)) {
+            push(result);
+          } else {
+            runtimeError("Operands must be numbers.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
+        }
+        break;
+      }
+      case OP_DIVIDE: {
+        if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
+          double b = AS_NUMBER(pop());
+          double a = AS_NUMBER(pop());
+          push(NUMBER_VAL(a / b));
+        } else {
+          Value b = pop();
+          Value a = pop();
+          Value result;
+          if (callMagicBinary(a, vm.magicDiv, b, &result)) {
+            push(result);
+          } else {
+            runtimeError("Operands must be numbers.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
+        }
+        break;
+      }
+      case OP_MODULO: {
+        if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
+          double b = AS_NUMBER(pop());
+          double a = AS_NUMBER(pop());
+          push(NUMBER_VAL(fmod(a, b)));
+        } else {
+          Value b = pop();
+          Value a = pop();
+          Value result;
+          if (callMagicBinary(a, vm.magicMod, b, &result)) {
+            push(result);
+          } else {
+            runtimeError("Operands must be numbers.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
+        }
         break;
       }
       case OP_NOT:
         push(BOOL_VAL(isFalsey(pop())));
         break;
-      case OP_NEGATE:
-        if (!IS_NUMBER(peek(0))) {
-          runtimeError("Operand must be a number.");
-          return INTERPRET_RUNTIME_ERROR;
+      case OP_NEGATE: {
+        if (IS_NUMBER(peek(0))) {
+          push(NUMBER_VAL(-AS_NUMBER(pop())));
+        } else {
+          Value operand = pop();
+          Value result;
+          if (callMagicUnary(operand, vm.magicNeg, &result)) {
+            push(result);
+          } else {
+            runtimeError("Operand must be a number.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
         }
-        push(NUMBER_VAL(-AS_NUMBER(pop())));
         break;
+      }
       case OP_TYPEOF: {
         Value value = pop();
         push(OBJ_VAL(typeOfValue(value)));
@@ -1039,6 +1272,29 @@ static InterpretResult run(int baseFrame) {
           return INTERPRET_RUNTIME_ERROR;
         }
         frame = &vm.frames[vm.frameCount - 1];
+        break;
+      }
+      case OP_CHECK_TYPE: {
+        Value typeVal = pop();
+        Value instance = pop();
+        bool match = false;
+        if (IS_TYPE_DESCRIPTOR(typeVal)) {
+          match = valueMatchesTypeDescriptor(instance,
+                      AS_TYPE_DESCRIPTOR(typeVal));
+        } else if (IS_CLASS(typeVal)) {
+          if (IS_INSTANCE(instance)) {
+            ObjClass* klass = AS_INSTANCE(instance)->klass;
+            ObjClass* target = AS_CLASS(typeVal);
+            while (klass != NULL) {
+              if (klass == target) { match = true; break; }
+              klass = klass->superclass;
+            }
+          }
+        } else {
+          runtimeError("Type pattern requires a type or class.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        push(BOOL_VAL(match));
         break;
       }
       case OP_SUPER_INVOKE: {
@@ -1171,6 +1427,7 @@ static InterpretResult run(int baseFrame) {
         }
 
         ObjClass* subclass = AS_CLASS(peek(0));
+        subclass->superclass = AS_CLASS(superclass);
         tableAddAll(&AS_CLASS(superclass)->methods,
                     &subclass->methods);
         pop(); // Subclass.
@@ -1294,7 +1551,6 @@ static InterpretResult run(int baseFrame) {
   #undef READ_SHORT
   #undef READ_CONSTANT
   #undef READ_STRING
-  #undef BINARY_OP
 }
 
 InterpretResult interpret(const char* source) {

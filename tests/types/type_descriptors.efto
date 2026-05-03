@@ -1,0 +1,18 @@
+// Type descriptors are accessible as globals.
+print number;    // expect: <type number>
+print string;    // expect: <type string>
+print bool;      // expect: <type bool>
+print array;     // expect: <type array>
+print map;       // expect: <type map>
+print function;  // expect: <type function>
+
+// typeof still returns strings (backward compatible).
+print typeof(42) == "number"; // expect: true
+print typeof("hi") == "string"; // expect: true
+
+// Type descriptors can be stored in variables.
+var t = number;
+print t; // expect: <type number>
+
+// typeof on a type descriptor itself.
+print typeof(number) == "type"; // expect: true

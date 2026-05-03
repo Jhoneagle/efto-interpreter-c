@@ -1,0 +1,29 @@
+// Typed array accepts correct type.
+var nums = Array(number);
+nums.push(1);
+nums.push(2);
+nums.push(3);
+print nums; // expect: [1, 2, 3]
+
+// Typed array with string type.
+var strs = Array(string);
+strs.push("hello");
+strs.push("world");
+print strs; // expect: [hello, world]
+
+// Unguarded Array() works like [].
+var plain = Array();
+plain.push(1);
+plain.push("mixed");
+print plain; // expect: [1, mixed]
+
+// Class-typed array.
+class Point {
+    init(x, y) { this.x = x; this.y = y; }
+    __toString__() { return "(${this.x}, ${this.y})"; }
+}
+var points = Array(Point);
+points.push(Point(1, 2));
+points.push(Point(3, 4));
+print points.length; // expect: 2
+print points[0]; // expect: (1, 2)

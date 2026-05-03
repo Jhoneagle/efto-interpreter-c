@@ -248,6 +248,7 @@ static void binary(bool canAssign) {
     case TOKEN_STAR:          emitByte(OP_MULTIPLY); break;
     case TOKEN_SLASH:         emitByte(OP_DIVIDE); break;
     case TOKEN_PERCENT:       emitByte(OP_MODULO); break;
+    case TOKEN_IS:            emitByte(OP_CHECK_TYPE); break;
     default: return; // Unreachable.
   }
 }
@@ -830,6 +831,7 @@ ParseRule rules[] = {
   [TOKEN_FINALLY]       = {NULL,     NULL,   PREC_NONE},
   [TOKEN_TYPEOF]        = {typeof_,  NULL,   PREC_NONE},
   [TOKEN_MATCH]         = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_IS]            = {NULL,     binary, PREC_COMPARISON},
   [TOKEN_DOT_DOT_DOT]  = {NULL,     NULL,   PREC_NONE},
   [TOKEN_QUESTION]      = {NULL,     ternary, PREC_TERNARY},
   [TOKEN_COLON]         = {NULL,     NULL,   PREC_NONE},

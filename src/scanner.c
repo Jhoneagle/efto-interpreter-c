@@ -176,6 +176,7 @@ static TokenType identifierType() {
           case 'f': return checkKeyword(2, 0, "", TOKEN_IF);
           case 'm': return checkKeyword(2, 4, "port", TOKEN_IMPORT);
           case 'n': return checkKeyword(2, 0, "", TOKEN_IN);
+          case 's': return checkKeyword(2, 0, "", TOKEN_IS);
         }
       }
       break;
