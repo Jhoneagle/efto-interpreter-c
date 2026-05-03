@@ -2672,7 +2672,7 @@ static Value regexCompileNative(int argCount, Value* args) {
 static bool regexTestNative(Value receiver, int argCount, Value* args,
                             Value* result) {
   ObjRegex* re = AS_REGEX(receiver);
-  if (!IS_STRING(args[0])) {
+  if (argCount < 1 || !IS_STRING(args[0])) {
     runtimeError("regex.test() expects a string.");
     return false;
   }
@@ -2684,8 +2684,8 @@ static bool regexTestNative(Value receiver, int argCount, Value* args,
 static bool regexMatchNative(Value receiver, int argCount, Value* args,
                              Value* result) {
   ObjRegex* re = AS_REGEX(receiver);
-  if (!IS_STRING(args[0])) {
-    runtimeError("regex.match() expects a string.");
+  if (argCount < 1 || !IS_STRING(args[0])) {
+    runtimeError("regex.find() expects a string.");
     return false;
   }
   const char* text = AS_CSTRING(args[0]);
@@ -2731,8 +2731,8 @@ static bool regexMatchNative(Value receiver, int argCount, Value* args,
 static bool regexMatchAllNative(Value receiver, int argCount, Value* args,
                                 Value* result) {
   ObjRegex* re = AS_REGEX(receiver);
-  if (!IS_STRING(args[0])) {
-    runtimeError("regex.matchAll() expects a string.");
+  if (argCount < 1 || !IS_STRING(args[0])) {
+    runtimeError("regex.findAll() expects a string.");
     return false;
   }
   const char* text = AS_CSTRING(args[0]);
@@ -2789,7 +2789,7 @@ static bool regexMatchAllNative(Value receiver, int argCount, Value* args,
 static bool regexReplaceNative(Value receiver, int argCount, Value* args,
                                Value* result) {
   ObjRegex* re = AS_REGEX(receiver);
-  if (!IS_STRING(args[0]) || !IS_STRING(args[1])) {
+  if (argCount < 2 || !IS_STRING(args[0]) || !IS_STRING(args[1])) {
     runtimeError("regex.replace() expects two strings.");
     return false;
   }
@@ -2820,7 +2820,7 @@ static bool regexReplaceNative(Value receiver, int argCount, Value* args,
 static bool regexSplitNative(Value receiver, int argCount, Value* args,
                              Value* result) {
   ObjRegex* re = AS_REGEX(receiver);
-  if (!IS_STRING(args[0])) {
+  if (argCount < 1 || !IS_STRING(args[0])) {
     runtimeError("regex.split() expects a string.");
     return false;
   }

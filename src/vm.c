@@ -15,6 +15,20 @@
 
 VM vm;
 
+// Convert double to int32 safely (JS-style ToInt32).
+// Handles NaN, infinity, and out-of-range values without UB.
+static inline int32_t toInt32(double d) {
+  if (!isfinite(d) || d == 0.0) return 0;
+  d = fmod(trunc(d), 4294967296.0);
+  if (d >= 2147483648.0) d -= 4294967296.0;
+  else if (d < -2147483648.0) d += 4294967296.0;
+  return (int32_t)d;
+}
+
+static inline uint32_t toUint32(double d) {
+  return (uint32_t)toInt32(d);
+}
+
 static void closeUpvalues(Value* last);
 ObjString* stringify(Value value);
 static InterpretResult run(int baseFrame);
@@ -1324,8 +1338,8 @@ static InterpretResult run(int baseFrame) {
           runtimeError("Operands must be numbers.");
           return INTERPRET_RUNTIME_ERROR;
         }
-        int32_t b = (int32_t)AS_NUMBER(pop());
-        int32_t a = (int32_t)AS_NUMBER(pop());
+        int32_t b = toInt32(AS_NUMBER(pop()));
+        int32_t a = toInt32(AS_NUMBER(pop()));
         push(NUMBER_VAL((double)(a & b)));
         break;
       }
@@ -1334,8 +1348,8 @@ static InterpretResult run(int baseFrame) {
           runtimeError("Operands must be numbers.");
           return INTERPRET_RUNTIME_ERROR;
         }
-        int32_t b = (int32_t)AS_NUMBER(pop());
-        int32_t a = (int32_t)AS_NUMBER(pop());
+        int32_t b = toInt32(AS_NUMBER(pop()));
+        int32_t a = toInt32(AS_NUMBER(pop()));
         push(NUMBER_VAL((double)(a | b)));
         break;
       }
@@ -1344,8 +1358,8 @@ static InterpretResult run(int baseFrame) {
           runtimeError("Operands must be numbers.");
           return INTERPRET_RUNTIME_ERROR;
         }
-        int32_t b = (int32_t)AS_NUMBER(pop());
-        int32_t a = (int32_t)AS_NUMBER(pop());
+        int32_t b = toInt32(AS_NUMBER(pop()));
+        int32_t a = toInt32(AS_NUMBER(pop()));
         push(NUMBER_VAL((double)(a ^ b)));
         break;
       }
@@ -1354,7 +1368,7 @@ static InterpretResult run(int baseFrame) {
           runtimeError("Operand must be a number.");
           return INTERPRET_RUNTIME_ERROR;
         }
-        int32_t a = (int32_t)AS_NUMBER(pop());
+        int32_t a = toInt32(AS_NUMBER(pop()));
         push(NUMBER_VAL((double)(~a)));
         break;
       }
@@ -1363,9 +1377,9 @@ static InterpretResult run(int baseFrame) {
           runtimeError("Operands must be numbers.");
           return INTERPRET_RUNTIME_ERROR;
         }
-        int32_t b = (int32_t)AS_NUMBER(pop()) & 31;
-        int32_t a = (int32_t)AS_NUMBER(pop());
-        push(NUMBER_VAL((double)(a << b)));
+        uint32_t b = toUint32(AS_NUMBER(pop())) & 31;
+        uint32_t a = toUint32(AS_NUMBER(pop()));
+        push(NUMBER_VAL((double)(int32_t)(a << b)));
         break;
       }
       case OP_RIGHT_SHIFT: {
@@ -1373,8 +1387,8 @@ static InterpretResult run(int baseFrame) {
           runtimeError("Operands must be numbers.");
           return INTERPRET_RUNTIME_ERROR;
         }
-        int32_t b = (int32_t)AS_NUMBER(pop()) & 31;
-        int32_t a = (int32_t)AS_NUMBER(pop());
+        uint32_t b = toUint32(AS_NUMBER(pop())) & 31;
+        int32_t a = toInt32(AS_NUMBER(pop()));
         push(NUMBER_VAL((double)(a >> b)));
         break;
       }
