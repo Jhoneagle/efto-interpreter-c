@@ -69,6 +69,8 @@ typedef enum {
 
 typedef enum {
   TYPETAG_ANY = 0,
+  TYPETAG_INT,
+  TYPETAG_DOUBLE,
   TYPETAG_NUMBER,
   TYPETAG_STRING,
   TYPETAG_BOOL,

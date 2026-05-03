@@ -1,6 +1,6 @@
 // typeof operator on primitives.
-print typeof 42;        // expect: number
-print typeof 3.14;      // expect: number
+print typeof 42;        // expect: int
+print typeof 3.14;      // expect: double
 print typeof "hello";   // expect: string
 print typeof true;      // expect: bool
 print typeof false;     // expect: bool
@@ -22,9 +22,9 @@ print typeof d;         // expect: instance
 
 // typeof in expressions.
 var t = typeof 42;
-print t;                // expect: number
+print t;                // expect: int
 print typeof t;         // expect: string
 
 // typeof with complex expression.
-print typeof (1 + 2);   // expect: number
-print typeof [].length;  // expect: number
+print typeof (1 + 2);   // expect: int
+print typeof [].length;  // expect: int

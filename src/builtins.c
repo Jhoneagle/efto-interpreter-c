@@ -1,4 +1,6 @@
 #include <ctype.h>
+#include <errno.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -21,7 +23,7 @@
 #include "vm.h"
 
 static Value clockNative(int argCount, Value* args) {
-  return NUMBER_VAL((double)clock() / CLOCKS_PER_SEC);
+  return DOUBLE_VAL((double)clock() / CLOCKS_PER_SEC);
 }
 
 // --- Type guard helpers ---
@@ -79,13 +81,13 @@ static bool arraySlice(Value receiver, int argCount, Value* args,
                        Value* result) {
   ObjArray* array = AS_ARRAY(receiver);
 
-  if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
-    runtimeError("Slice arguments must be numbers.");
+  if (!IS_INT(args[0]) || !IS_INT(args[1])) {
+    runtimeError("Slice arguments must be integers.");
     return false;
   }
 
-  int start = (int)AS_NUMBER(args[0]);
-  int end = (int)AS_NUMBER(args[1]);
+  int start = (int)AS_INT(args[0]);
+  int end = (int)AS_INT(args[1]);
   int length = array->elements.count;
 
   if (start < 0) start = 0;
@@ -126,7 +128,7 @@ static int sortCompare(const void* a, const void* b) {
       return (ba == bb) ? 0 : (ba ? 1 : -1);
     }
     case 2: {
-      double da = AS_NUMBER(va), db = AS_NUMBER(vb);
+      double da = AS_DOUBLE_COERCE(va), db = AS_DOUBLE_COERCE(vb);
       return (da < db) ? -1 : (da > db) ? 1 : 0;
     }
     case 3:
@@ -177,7 +179,7 @@ static bool arraySort(Value receiver, int argCount, Value* args,
             runtimeError("__cmp__ must return a number.");
             return false;
           }
-          double d = AS_NUMBER(cmpResult);
+          double d = AS_DOUBLE_COERCE(cmpResult);
           cmp = (d < 0) ? -1 : (d > 0) ? 1 : 0;
         } else if (vm.frameCount == 0) {
           return false;
@@ -323,11 +325,11 @@ static bool arrayIndexOf(Value receiver, int argCount, Value* args,
   Value search = args[0];
   for (int i = 0; i < array->elements.count; i++) {
     if (valuesEqual(array->elements.values[i], search)) {
-      *result = NUMBER_VAL((double)i);
+      *result = INT_VAL((int64_t)i);
       return true;
     }
   }
-  *result = NUMBER_VAL(-1);
+  *result = INT_VAL(-1);
   return true;
 }
 
@@ -672,12 +674,12 @@ static bool mapAll(Value receiver, int argCount, Value* args,
 static bool stringSubstring(Value receiver, int argCount, Value* args,
                             Value* result) {
   ObjString* str = AS_STRING(receiver);
-  if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
-    runtimeError("Substring arguments must be numbers.");
+  if (!IS_INT(args[0]) || !IS_INT(args[1])) {
+    runtimeError("Substring arguments must be integers.");
     return false;
   }
-  int start = (int)AS_NUMBER(args[0]);
-  int end = (int)AS_NUMBER(args[1]);
+  int start = (int)AS_INT(args[0]);
+  int end = (int)AS_INT(args[1]);
   if (start < 0) start = 0;
   if (end > str->length) end = str->length;
   if (start > end) start = end;
@@ -694,7 +696,7 @@ static bool stringIndexOf(Value receiver, int argCount, Value* args,
   }
   ObjString* search = AS_STRING(args[0]);
   char* found = strstr(str->chars, search->chars);
-  *result = NUMBER_VAL(found == NULL ? -1 : (double)(found - str->chars));
+  *result = INT_VAL(found == NULL ? -1 : (int64_t)(found - str->chars));
   return true;
 }
 
@@ -872,11 +874,11 @@ static bool stringContains(Value receiver, int argCount, Value* args,
 static bool stringRepeat(Value receiver, int argCount, Value* args,
                           Value* result) {
   ObjString* str = AS_STRING(receiver);
-  if (!IS_NUMBER(args[0])) {
-    runtimeError("repeat argument must be a number.");
+  if (!IS_INT(args[0])) {
+    runtimeError("repeat argument must be an integer.");
     return false;
   }
-  int n = (int)AS_NUMBER(args[0]);
+  int n = (int)AS_INT(args[0]);
   if (n < 0) {
     runtimeError("repeat count must be non-negative.");
     return false;
@@ -904,11 +906,11 @@ static bool stringRepeat(Value receiver, int argCount, Value* args,
 static bool stringCharAt(Value receiver, int argCount, Value* args,
                           Value* result) {
   ObjString* str = AS_STRING(receiver);
-  if (!IS_NUMBER(args[0])) {
-    runtimeError("charAt argument must be a number.");
+  if (!IS_INT(args[0])) {
+    runtimeError("charAt argument must be an integer.");
     return false;
   }
-  int index = (int)AS_NUMBER(args[0]);
+  int index = (int)AS_INT(args[0]);
   if (index < 0 || index >= str->length) {
     runtimeError("String index %d out of bounds [0, %d).",
                  index, str->length);
@@ -921,11 +923,11 @@ static bool stringCharAt(Value receiver, int argCount, Value* args,
 static bool stringPadStart(Value receiver, int argCount, Value* args,
                            Value* result) {
   ObjString* str = AS_STRING(receiver);
-  if (!IS_NUMBER(args[0])) {
-    runtimeError("padStart() first argument must be a number.");
+  if (!IS_INT(args[0])) {
+    runtimeError("padStart() first argument must be an integer.");
     return false;
   }
-  int targetLen = (int)AS_NUMBER(args[0]);
+  int targetLen = (int)AS_INT(args[0]);
   const char* pad = " ";
   int padLen = 1;
   if (argCount == 2) {
@@ -958,11 +960,11 @@ static bool stringPadStart(Value receiver, int argCount, Value* args,
 static bool stringPadEnd(Value receiver, int argCount, Value* args,
                          Value* result) {
   ObjString* str = AS_STRING(receiver);
-  if (!IS_NUMBER(args[0])) {
-    runtimeError("padEnd() first argument must be a number.");
+  if (!IS_INT(args[0])) {
+    runtimeError("padEnd() first argument must be an integer.");
     return false;
   }
-  int targetLen = (int)AS_NUMBER(args[0]);
+  int targetLen = (int)AS_INT(args[0]);
   const char* pad = " ";
   int padLen = 1;
   if (argCount == 2) {
@@ -1033,7 +1035,7 @@ static bool arrayMap(Value receiver, int argCount, Value* args,
   for (int i = 0; i < length; i++) {
     ObjArray* src = AS_ARRAY(vm.stackTop[-3]);
     Value cb = vm.stackTop[-2];
-    Value cbArgs[2] = { src->elements.values[i], NUMBER_VAL(i) };
+    Value cbArgs[2] = { src->elements.values[i], INT_VAL((int64_t)i) };
 
     Value mapped;
     if (!invokeCallback(cb, passArgs, cbArgs, &mapped)) {
@@ -1067,7 +1069,7 @@ static bool arrayFilter(Value receiver, int argCount, Value* args,
   for (int i = 0; i < length; i++) {
     ObjArray* src = AS_ARRAY(vm.stackTop[-3]);
     Value cb = vm.stackTop[-2];
-    Value cbArgs[2] = { src->elements.values[i], NUMBER_VAL(i) };
+    Value cbArgs[2] = { src->elements.values[i], INT_VAL((int64_t)i) };
 
     Value test;
     if (!invokeCallback(cb, passArgs, cbArgs, &test)) {
@@ -1118,7 +1120,7 @@ static bool arrayReduce(Value receiver, int argCount, Value* args,
     ObjArray* src = AS_ARRAY(vm.stackTop[-3]);
     Value cb = vm.stackTop[-2];
     Value acc = vm.stackTop[-1];
-    Value cbArgs[3] = { acc, src->elements.values[i], NUMBER_VAL(i) };
+    Value cbArgs[3] = { acc, src->elements.values[i], INT_VAL((int64_t)i) };
 
     Value reduced;
     if (!invokeCallback(cb, passArgs, cbArgs, &reduced)) {
@@ -1148,7 +1150,7 @@ static bool arrayForEach(Value receiver, int argCount, Value* args,
   for (int i = 0; i < length; i++) {
     ObjArray* src = AS_ARRAY(vm.stackTop[-2]);
     Value cb = vm.stackTop[-1];
-    Value cbArgs[2] = { src->elements.values[i], NUMBER_VAL(i) };
+    Value cbArgs[2] = { src->elements.values[i], INT_VAL((int64_t)i) };
 
     Value dummy;
     if (!invokeCallback(cb, passArgs, cbArgs, &dummy)) {
@@ -1176,7 +1178,7 @@ static bool arrayFind(Value receiver, int argCount, Value* args,
   for (int i = 0; i < length; i++) {
     ObjArray* src = AS_ARRAY(vm.stackTop[-2]);
     Value cb = vm.stackTop[-1];
-    Value cbArgs[2] = { src->elements.values[i], NUMBER_VAL(i) };
+    Value cbArgs[2] = { src->elements.values[i], INT_VAL((int64_t)i) };
 
     Value test;
     if (!invokeCallback(cb, passArgs, cbArgs, &test)) {
@@ -1211,7 +1213,7 @@ static bool arrayFindIndex(Value receiver, int argCount, Value* args,
   for (int i = 0; i < length; i++) {
     ObjArray* src = AS_ARRAY(vm.stackTop[-2]);
     Value cb = vm.stackTop[-1];
-    Value cbArgs[2] = { src->elements.values[i], NUMBER_VAL(i) };
+    Value cbArgs[2] = { src->elements.values[i], INT_VAL((int64_t)i) };
 
     Value test;
     if (!invokeCallback(cb, passArgs, cbArgs, &test)) {
@@ -1221,13 +1223,13 @@ static bool arrayFindIndex(Value receiver, int argCount, Value* args,
 
     if (!IS_NIL(test) && !(IS_BOOL(test) && !AS_BOOL(test))) {
       vm.stackTop -= 2;
-      *result = NUMBER_VAL(i);
+      *result = INT_VAL((int64_t)i);
       return true;
     }
   }
 
   vm.stackTop -= 2;
-  *result = NUMBER_VAL(-1);
+  *result = INT_VAL(-1);
   return true;
 }
 
@@ -1245,7 +1247,7 @@ static bool arrayAll(Value receiver, int argCount, Value* args,
   for (int i = 0; i < length; i++) {
     ObjArray* src = AS_ARRAY(vm.stackTop[-2]);
     Value cb = vm.stackTop[-1];
-    Value cbArgs[2] = { src->elements.values[i], NUMBER_VAL(i) };
+    Value cbArgs[2] = { src->elements.values[i], INT_VAL((int64_t)i) };
 
     Value test;
     if (!invokeCallback(cb, passArgs, cbArgs, &test)) {
@@ -1279,7 +1281,7 @@ static bool arrayAny(Value receiver, int argCount, Value* args,
   for (int i = 0; i < length; i++) {
     ObjArray* src = AS_ARRAY(vm.stackTop[-2]);
     Value cb = vm.stackTop[-1];
-    Value cbArgs[2] = { src->elements.values[i], NUMBER_VAL(i) };
+    Value cbArgs[2] = { src->elements.values[i], INT_VAL((int64_t)i) };
 
     Value test;
     if (!invokeCallback(cb, passArgs, cbArgs, &test)) {
@@ -1304,7 +1306,8 @@ static bool arrayAny(Value receiver, int argCount, Value* args,
 ObjString* typeOfValue(Value value) {
   if (IS_NIL(value))    return copyString("nil", 3);
   if (IS_BOOL(value))   return copyString("bool", 4);
-  if (IS_NUMBER(value)) return copyString("number", 6);
+  if (IS_INT(value))    return copyString("int", 3);
+  if (IS_DOUBLE(value)) return copyString("double", 6);
 
   if (IS_OBJ(value)) {
     switch (OBJ_TYPE(value)) {
@@ -1343,29 +1346,61 @@ static Value toStringNative(int argCount, Value* args) {
   return OBJ_VAL(stringify(args[0]));
 }
 
-static Value toNumberNative(int argCount, Value* args) {
+static Value toIntNative(int argCount, Value* args) {
   if (argCount != 1) {
-    runtimeError("toNumber() expects 1 argument.");
+    runtimeError("toInt() expects 1 argument.");
     return NIL_VAL;
   }
   Value v = args[0];
-  if (IS_NUMBER(v)) return v;
-  if (IS_BOOL(v)) return NUMBER_VAL(AS_BOOL(v) ? 1.0 : 0.0);
-  if (IS_NIL(v)) return NUMBER_VAL(0.0);
+  if (IS_INT(v)) return v;
+  if (IS_DOUBLE(v)) {
+    double d = AS_DOUBLE(v);
+    if (!isfinite(d) || d > (double)INT64_MAX || d < (double)INT64_MIN) {
+      runtimeError("Cannot convert %g to int.", d);
+      return NIL_VAL;
+    }
+    return INT_VAL((int64_t)d);
+  }
+  if (IS_BOOL(v)) return INT_VAL(AS_BOOL(v) ? 1 : 0);
+  if (IS_NIL(v)) return INT_VAL(0);
+  if (IS_STRING(v)) {
+    char* end;
+    errno = 0;
+    long long ll = strtoll(AS_CSTRING(v), &end, 10);
+    if (end == AS_CSTRING(v) || *end != '\0' || errno == ERANGE) {
+      runtimeError("Cannot convert '%s' to int.", AS_CSTRING(v));
+      return NIL_VAL;
+    }
+    return INT_VAL((int64_t)ll);
+  }
+  runtimeError("Cannot convert to int.");
+  return NIL_VAL;
+}
+
+static Value toDoubleNative(int argCount, Value* args) {
+  if (argCount != 1) {
+    runtimeError("toDouble() expects 1 argument.");
+    return NIL_VAL;
+  }
+  Value v = args[0];
+  if (IS_DOUBLE(v)) return v;
+  if (IS_INT(v)) return DOUBLE_VAL((double)AS_INT(v));
+  if (IS_BOOL(v)) return DOUBLE_VAL(AS_BOOL(v) ? 1.0 : 0.0);
+  if (IS_NIL(v)) return DOUBLE_VAL(0.0);
   if (IS_STRING(v)) {
     char* end;
     double d = strtod(AS_CSTRING(v), &end);
     if (end == AS_CSTRING(v) || *end != '\0') {
-      runtimeError("Cannot convert '%s' to number.", AS_CSTRING(v));
+      runtimeError("Cannot convert '%s' to double.", AS_CSTRING(v));
       return NIL_VAL;
     }
-    return NUMBER_VAL(d);
+    return DOUBLE_VAL(d);
   }
   if (IS_INSTANCE(v)) {
     Value result;
     if (callMagicUnary(v, vm.magicToNumber, &result)) return result;
   }
-  runtimeError("Cannot convert to number.");
+  runtimeError("Cannot convert to double.");
   return NIL_VAL;
 }
 
@@ -1390,7 +1425,7 @@ static Value sqrtNative(int argCount, Value* args) {
     runtimeError("sqrt() expects a number argument.");
     return NIL_VAL;
   }
-  return NUMBER_VAL(sqrt(AS_NUMBER(args[0])));
+  return DOUBLE_VAL(sqrt(AS_DOUBLE_COERCE(args[0])));
 }
 
 static Value absNative(int argCount, Value* args) {
@@ -1398,7 +1433,15 @@ static Value absNative(int argCount, Value* args) {
     runtimeError("abs() expects a number argument.");
     return NIL_VAL;
   }
-  return NUMBER_VAL(fabs(AS_NUMBER(args[0])));
+  if (IS_INT(args[0])) {
+    int64_t a = AS_INT(args[0]);
+    if (a == INT64_MIN) {
+      runtimeError("Integer overflow.");
+      return NIL_VAL;
+    }
+    return INT_VAL(a < 0 ? -a : a);
+  }
+  return DOUBLE_VAL(fabs(AS_DOUBLE(args[0])));
 }
 
 static Value floorNative(int argCount, Value* args) {
@@ -1406,7 +1449,12 @@ static Value floorNative(int argCount, Value* args) {
     runtimeError("floor() expects a number argument.");
     return NIL_VAL;
   }
-  return NUMBER_VAL(floor(AS_NUMBER(args[0])));
+  if (IS_INT(args[0])) return args[0];
+  double d = floor(AS_DOUBLE(args[0]));
+  if (!isfinite(d) || d > (double)INT64_MAX || d < (double)INT64_MIN) {
+    return DOUBLE_VAL(d);
+  }
+  return INT_VAL((int64_t)d);
 }
 
 static Value ceilNative(int argCount, Value* args) {
@@ -1414,7 +1462,12 @@ static Value ceilNative(int argCount, Value* args) {
     runtimeError("ceil() expects a number argument.");
     return NIL_VAL;
   }
-  return NUMBER_VAL(ceil(AS_NUMBER(args[0])));
+  if (IS_INT(args[0])) return args[0];
+  double d = ceil(AS_DOUBLE(args[0]));
+  if (!isfinite(d) || d > (double)INT64_MAX || d < (double)INT64_MIN) {
+    return DOUBLE_VAL(d);
+  }
+  return INT_VAL((int64_t)d);
 }
 
 static Value roundNative(int argCount, Value* args) {
@@ -1422,7 +1475,12 @@ static Value roundNative(int argCount, Value* args) {
     runtimeError("round() expects a number argument.");
     return NIL_VAL;
   }
-  return NUMBER_VAL(round(AS_NUMBER(args[0])));
+  if (IS_INT(args[0])) return args[0];
+  double d = round(AS_DOUBLE(args[0]));
+  if (!isfinite(d) || d > (double)INT64_MAX || d < (double)INT64_MIN) {
+    return DOUBLE_VAL(d);
+  }
+  return INT_VAL((int64_t)d);
 }
 
 static Value minNative(int argCount, Value* args) {
@@ -1430,8 +1488,12 @@ static Value minNative(int argCount, Value* args) {
     runtimeError("min() expects two number arguments.");
     return NIL_VAL;
   }
-  double a = AS_NUMBER(args[0]), b = AS_NUMBER(args[1]);
-  return NUMBER_VAL(a < b ? a : b);
+  if (IS_INT(args[0]) && IS_INT(args[1])) {
+    int64_t a = AS_INT(args[0]), b = AS_INT(args[1]);
+    return INT_VAL(a < b ? a : b);
+  }
+  double a = AS_DOUBLE_COERCE(args[0]), b = AS_DOUBLE_COERCE(args[1]);
+  return DOUBLE_VAL(a < b ? a : b);
 }
 
 static Value maxNative(int argCount, Value* args) {
@@ -1439,8 +1501,12 @@ static Value maxNative(int argCount, Value* args) {
     runtimeError("max() expects two number arguments.");
     return NIL_VAL;
   }
-  double a = AS_NUMBER(args[0]), b = AS_NUMBER(args[1]);
-  return NUMBER_VAL(a > b ? a : b);
+  if (IS_INT(args[0]) && IS_INT(args[1])) {
+    int64_t a = AS_INT(args[0]), b = AS_INT(args[1]);
+    return INT_VAL(a > b ? a : b);
+  }
+  double a = AS_DOUBLE_COERCE(args[0]), b = AS_DOUBLE_COERCE(args[1]);
+  return DOUBLE_VAL(a > b ? a : b);
 }
 
 static Value powNative(int argCount, Value* args) {
@@ -1448,11 +1514,11 @@ static Value powNative(int argCount, Value* args) {
     runtimeError("pow() expects two number arguments.");
     return NIL_VAL;
   }
-  return NUMBER_VAL(pow(AS_NUMBER(args[0]), AS_NUMBER(args[1])));
+  return DOUBLE_VAL(pow(AS_DOUBLE_COERCE(args[0]), AS_DOUBLE_COERCE(args[1])));
 }
 
 static Value randomNative(int argCount, Value* args) {
-  return NUMBER_VAL((double)rand() / RAND_MAX);
+  return DOUBLE_VAL((double)rand() / RAND_MAX);
 }
 
 static Value parseNumberNative(int argCount, Value* args) {
@@ -1460,10 +1526,24 @@ static Value parseNumberNative(int argCount, Value* args) {
     runtimeError("parseNumber() expects a string argument.");
     return NIL_VAL;
   }
+  const char* str = AS_STRING(args[0])->chars;
+  // Try integer first if no '.', 'e', 'E', or 'i'/'n' (for inf/nan).
+  bool hasDecimal = false;
+  for (const char* p = str; *p; p++) {
+    if (*p == '.' || *p == 'e' || *p == 'E') { hasDecimal = true; break; }
+  }
+  if (!hasDecimal) {
+    char* end;
+    errno = 0;
+    long long ll = strtoll(str, &end, 10);
+    if (end != str && *end == '\0' && errno != ERANGE) {
+      return INT_VAL((int64_t)ll);
+    }
+  }
   char* end;
-  double result = strtod(AS_STRING(args[0])->chars, &end);
-  if (end == AS_STRING(args[0])->chars || *end != '\0') return NIL_VAL;
-  return NUMBER_VAL(result);
+  double result = strtod(str, &end);
+  if (end == str || *end != '\0') return NIL_VAL;
+  return DOUBLE_VAL(result);
 }
 
 // --- Math extension functions ---
@@ -1473,7 +1553,7 @@ static Value sinNative(int argCount, Value* args) {
     runtimeError("sin() expects a number argument.");
     return NIL_VAL;
   }
-  return NUMBER_VAL(sin(AS_NUMBER(args[0])));
+  return DOUBLE_VAL(sin(AS_DOUBLE_COERCE(args[0])));
 }
 
 static Value cosNative(int argCount, Value* args) {
@@ -1481,7 +1561,7 @@ static Value cosNative(int argCount, Value* args) {
     runtimeError("cos() expects a number argument.");
     return NIL_VAL;
   }
-  return NUMBER_VAL(cos(AS_NUMBER(args[0])));
+  return DOUBLE_VAL(cos(AS_DOUBLE_COERCE(args[0])));
 }
 
 static Value tanNative(int argCount, Value* args) {
@@ -1489,7 +1569,7 @@ static Value tanNative(int argCount, Value* args) {
     runtimeError("tan() expects a number argument.");
     return NIL_VAL;
   }
-  return NUMBER_VAL(tan(AS_NUMBER(args[0])));
+  return DOUBLE_VAL(tan(AS_DOUBLE_COERCE(args[0])));
 }
 
 static Value asinNative(int argCount, Value* args) {
@@ -1497,7 +1577,7 @@ static Value asinNative(int argCount, Value* args) {
     runtimeError("asin() expects a number argument.");
     return NIL_VAL;
   }
-  return NUMBER_VAL(asin(AS_NUMBER(args[0])));
+  return DOUBLE_VAL(asin(AS_DOUBLE_COERCE(args[0])));
 }
 
 static Value acosNative(int argCount, Value* args) {
@@ -1505,7 +1585,7 @@ static Value acosNative(int argCount, Value* args) {
     runtimeError("acos() expects a number argument.");
     return NIL_VAL;
   }
-  return NUMBER_VAL(acos(AS_NUMBER(args[0])));
+  return DOUBLE_VAL(acos(AS_DOUBLE_COERCE(args[0])));
 }
 
 static Value atanNative(int argCount, Value* args) {
@@ -1513,7 +1593,7 @@ static Value atanNative(int argCount, Value* args) {
     runtimeError("atan() expects a number argument.");
     return NIL_VAL;
   }
-  return NUMBER_VAL(atan(AS_NUMBER(args[0])));
+  return DOUBLE_VAL(atan(AS_DOUBLE_COERCE(args[0])));
 }
 
 static Value atan2Native(int argCount, Value* args) {
@@ -1521,7 +1601,7 @@ static Value atan2Native(int argCount, Value* args) {
     runtimeError("atan2() expects two number arguments.");
     return NIL_VAL;
   }
-  return NUMBER_VAL(atan2(AS_NUMBER(args[0]), AS_NUMBER(args[1])));
+  return DOUBLE_VAL(atan2(AS_DOUBLE_COERCE(args[0]), AS_DOUBLE_COERCE(args[1])));
 }
 
 static Value logNative(int argCount, Value* args) {
@@ -1529,7 +1609,7 @@ static Value logNative(int argCount, Value* args) {
     runtimeError("log() expects a number argument.");
     return NIL_VAL;
   }
-  return NUMBER_VAL(log(AS_NUMBER(args[0])));
+  return DOUBLE_VAL(log(AS_DOUBLE_COERCE(args[0])));
 }
 
 static Value log10Native(int argCount, Value* args) {
@@ -1537,7 +1617,7 @@ static Value log10Native(int argCount, Value* args) {
     runtimeError("log10() expects a number argument.");
     return NIL_VAL;
   }
-  return NUMBER_VAL(log10(AS_NUMBER(args[0])));
+  return DOUBLE_VAL(log10(AS_DOUBLE_COERCE(args[0])));
 }
 
 static Value log2Native(int argCount, Value* args) {
@@ -1545,7 +1625,7 @@ static Value log2Native(int argCount, Value* args) {
     runtimeError("log2() expects a number argument.");
     return NIL_VAL;
   }
-  return NUMBER_VAL(log2(AS_NUMBER(args[0])));
+  return DOUBLE_VAL(log2(AS_DOUBLE_COERCE(args[0])));
 }
 
 static Value expNative(int argCount, Value* args) {
@@ -1553,7 +1633,7 @@ static Value expNative(int argCount, Value* args) {
     runtimeError("exp() expects a number argument.");
     return NIL_VAL;
   }
-  return NUMBER_VAL(exp(AS_NUMBER(args[0])));
+  return DOUBLE_VAL(exp(AS_DOUBLE_COERCE(args[0])));
 }
 
 static Value clampNative(int argCount, Value* args) {
@@ -1562,12 +1642,20 @@ static Value clampNative(int argCount, Value* args) {
     runtimeError("clamp() expects three number arguments.");
     return NIL_VAL;
   }
-  double val = AS_NUMBER(args[0]);
-  double lo = AS_NUMBER(args[1]);
-  double hi = AS_NUMBER(args[2]);
-  if (val < lo) return NUMBER_VAL(lo);
-  if (val > hi) return NUMBER_VAL(hi);
-  return NUMBER_VAL(val);
+  if (IS_INT(args[0]) && IS_INT(args[1]) && IS_INT(args[2])) {
+    int64_t val = AS_INT(args[0]);
+    int64_t lo = AS_INT(args[1]);
+    int64_t hi = AS_INT(args[2]);
+    if (val < lo) return INT_VAL(lo);
+    if (val > hi) return INT_VAL(hi);
+    return INT_VAL(val);
+  }
+  double val = AS_DOUBLE_COERCE(args[0]);
+  double lo = AS_DOUBLE_COERCE(args[1]);
+  double hi = AS_DOUBLE_COERCE(args[2]);
+  if (val < lo) return DOUBLE_VAL(lo);
+  if (val > hi) return DOUBLE_VAL(hi);
+  return DOUBLE_VAL(val);
 }
 
 static Value lerpNative(int argCount, Value* args) {
@@ -1576,10 +1664,10 @@ static Value lerpNative(int argCount, Value* args) {
     runtimeError("lerp() expects three number arguments.");
     return NIL_VAL;
   }
-  double a = AS_NUMBER(args[0]);
-  double b = AS_NUMBER(args[1]);
-  double t = AS_NUMBER(args[2]);
-  return NUMBER_VAL(a + (b - a) * t);
+  double a = AS_DOUBLE_COERCE(args[0]);
+  double b = AS_DOUBLE_COERCE(args[1]);
+  double t = AS_DOUBLE_COERCE(args[2]);
+  return DOUBLE_VAL(a + (b - a) * t);
 }
 
 static Value signNative(int argCount, Value* args) {
@@ -1587,16 +1675,16 @@ static Value signNative(int argCount, Value* args) {
     runtimeError("sign() expects a number argument.");
     return NIL_VAL;
   }
-  double x = AS_NUMBER(args[0]);
-  if (x > 0) return NUMBER_VAL(1);
-  if (x < 0) return NUMBER_VAL(-1);
-  return NUMBER_VAL(0);
+  double x = AS_DOUBLE_COERCE(args[0]);
+  if (x > 0) return INT_VAL(1);
+  if (x < 0) return INT_VAL(-1);
+  return INT_VAL(0);
 }
 
 // --- Time extension functions ---
 
 static Value timestampNative(int argCount, Value* args) {
-  return NUMBER_VAL((double)time(NULL));
+  return INT_VAL((int64_t)time(NULL));
 }
 
 static Value sleepNative(int argCount, Value* args) {
@@ -1604,7 +1692,7 @@ static Value sleepNative(int argCount, Value* args) {
     runtimeError("sleep() expects a number argument (seconds).");
     return NIL_VAL;
   }
-  double seconds = AS_NUMBER(args[0]);
+  double seconds = AS_DOUBLE_COERCE(args[0]);
   if (seconds < 0) {
     runtimeError("sleep() argument must be non-negative.");
     return NIL_VAL;
@@ -1625,7 +1713,7 @@ static Value datePartsNative(int argCount, Value* args) {
   if (argCount == 0) {
     t = time(NULL);
   } else if (argCount == 1 && IS_NUMBER(args[0])) {
-    t = (time_t)AS_NUMBER(args[0]);
+    t = (time_t)AS_DOUBLE_COERCE(args[0]);
   } else {
     runtimeError("dateParts() expects 0 or 1 number argument.");
     return NIL_VAL;
@@ -1643,37 +1731,37 @@ static Value datePartsNative(int argCount, Value* args) {
   ObjString* k;
   k = copyString("year", 4);
   push(OBJ_VAL(k));
-  valueTableSet(&map->entries, OBJ_VAL(k), NUMBER_VAL(tm->tm_year + 1900));
+  valueTableSet(&map->entries, OBJ_VAL(k), INT_VAL((int64_t)(tm->tm_year + 1900)));
   pop();
 
   k = copyString("month", 5);
   push(OBJ_VAL(k));
-  valueTableSet(&map->entries, OBJ_VAL(k), NUMBER_VAL(tm->tm_mon + 1));
+  valueTableSet(&map->entries, OBJ_VAL(k), INT_VAL((int64_t)(tm->tm_mon + 1)));
   pop();
 
   k = copyString("day", 3);
   push(OBJ_VAL(k));
-  valueTableSet(&map->entries, OBJ_VAL(k), NUMBER_VAL(tm->tm_mday));
+  valueTableSet(&map->entries, OBJ_VAL(k), INT_VAL((int64_t)tm->tm_mday));
   pop();
 
   k = copyString("hour", 4);
   push(OBJ_VAL(k));
-  valueTableSet(&map->entries, OBJ_VAL(k), NUMBER_VAL(tm->tm_hour));
+  valueTableSet(&map->entries, OBJ_VAL(k), INT_VAL((int64_t)tm->tm_hour));
   pop();
 
   k = copyString("minute", 6);
   push(OBJ_VAL(k));
-  valueTableSet(&map->entries, OBJ_VAL(k), NUMBER_VAL(tm->tm_min));
+  valueTableSet(&map->entries, OBJ_VAL(k), INT_VAL((int64_t)tm->tm_min));
   pop();
 
   k = copyString("second", 6);
   push(OBJ_VAL(k));
-  valueTableSet(&map->entries, OBJ_VAL(k), NUMBER_VAL(tm->tm_sec));
+  valueTableSet(&map->entries, OBJ_VAL(k), INT_VAL((int64_t)tm->tm_sec));
   pop();
 
   k = copyString("weekday", 7);
   push(OBJ_VAL(k));
-  valueTableSet(&map->entries, OBJ_VAL(k), NUMBER_VAL(tm->tm_wday));
+  valueTableSet(&map->entries, OBJ_VAL(k), INT_VAL((int64_t)tm->tm_wday));
   pop();
 
   pop(); // map GC protection
@@ -1686,7 +1774,7 @@ static Value formatDateNative(int argCount, Value* args) {
     return NIL_VAL;
   }
 
-  time_t t = (time_t)AS_NUMBER(args[0]);
+  time_t t = (time_t)AS_DOUBLE_COERCE(args[0]);
   const char* fmt = AS_CSTRING(args[1]);
 
   struct tm* tm = localtime(&t);
@@ -1921,7 +2009,7 @@ static Value osExitNative(int argCount, Value* args) {
       runtimeError("exit() expects a number argument.");
       return NIL_VAL;
     }
-    code = (int)AS_NUMBER(args[0]);
+    code = (int)AS_DOUBLE_COERCE(args[0]);
   } else if (argCount > 1) {
     runtimeError("exit() expects 0 or 1 arguments.");
     return NIL_VAL;
@@ -2019,61 +2107,68 @@ static Value osArgsNative(int argCount, Value* args) {
 // --- Collections module functions ---
 
 static Value collectionsRangeNative(int argCount, Value* args) {
-  double start = 0, end, step;
-  bool hasStep = false;
-
-  if (argCount == 1) {
-    if (!IS_NUMBER(args[0])) {
+  // Check all args are numbers.
+  for (int a = 0; a < argCount; a++) {
+    if (!IS_NUMBER(args[a])) {
       runtimeError("range() arguments must be numbers.");
       return NIL_VAL;
     }
-    end = AS_NUMBER(args[0]);
-  } else if (argCount == 2) {
-    if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
-      runtimeError("range() arguments must be numbers.");
-      return NIL_VAL;
-    }
-    start = AS_NUMBER(args[0]);
-    end = AS_NUMBER(args[1]);
-  } else if (argCount == 3) {
-    if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1]) || !IS_NUMBER(args[2])) {
-      runtimeError("range() arguments must be numbers.");
-      return NIL_VAL;
-    }
-    start = AS_NUMBER(args[0]);
-    end = AS_NUMBER(args[1]);
-    step = AS_NUMBER(args[2]);
-    hasStep = true;
-  } else {
+  }
+  if (argCount < 1 || argCount > 3) {
     runtimeError("range() expects 1 to 3 arguments.");
     return NIL_VAL;
   }
 
-  if (!hasStep) {
-    step = (start <= end) ? 1 : -1;
+  // Determine if all args are int.
+  bool allInt = true;
+  for (int a = 0; a < argCount; a++) {
+    if (!IS_INT(args[a])) { allInt = false; break; }
   }
 
-  if (step == 0) {
-    runtimeError("range() step cannot be zero.");
-    return NIL_VAL;
+  if (allInt) {
+    int64_t start = 0, end, step;
+    if (argCount == 1) { end = AS_INT(args[0]); }
+    else if (argCount == 2) { start = AS_INT(args[0]); end = AS_INT(args[1]); }
+    else { start = AS_INT(args[0]); end = AS_INT(args[1]); step = AS_INT(args[2]); }
+    if (argCount < 3) step = (start <= end) ? 1 : -1;
+    if (step == 0) { runtimeError("range() step cannot be zero."); return NIL_VAL; }
+    if ((step > 0 && start > end) || (step < 0 && start < end)) {
+      runtimeError("range() step direction conflicts with start/end.");
+      return NIL_VAL;
+    }
+    double countD = ceil((double)(end - start) / (double)step);
+    if (countD < 0) countD = 0;
+    if (countD > INT_MAX) { runtimeError("range() produces too many elements."); return NIL_VAL; }
+    int count = (int)countD;
+    ObjArray* arr = newArray();
+    push(OBJ_VAL(arr));
+    for (int i = 0; i < count; i++) {
+      writeValueArray(&arr->elements, INT_VAL(start + (int64_t)i * step));
+    }
+    pop();
+    return OBJ_VAL(arr);
   }
+
+  // Double path.
+  double start = 0, end, step;
+  bool hasStep = (argCount == 3);
+  if (argCount == 1) { end = AS_DOUBLE_COERCE(args[0]); }
+  else if (argCount == 2) { start = AS_DOUBLE_COERCE(args[0]); end = AS_DOUBLE_COERCE(args[1]); }
+  else { start = AS_DOUBLE_COERCE(args[0]); end = AS_DOUBLE_COERCE(args[1]); step = AS_DOUBLE_COERCE(args[2]); }
+  if (!hasStep) step = (start <= end) ? 1.0 : -1.0;
+  if (step == 0) { runtimeError("range() step cannot be zero."); return NIL_VAL; }
   if ((step > 0 && start > end) || (step < 0 && start < end)) {
     runtimeError("range() step direction conflicts with start/end.");
     return NIL_VAL;
   }
-
   double countD = ceil((end - start) / step);
   if (countD < 0) countD = 0;
-  if (countD > INT_MAX) {
-    runtimeError("range() produces too many elements.");
-    return NIL_VAL;
-  }
+  if (countD > INT_MAX) { runtimeError("range() produces too many elements."); return NIL_VAL; }
   int count = (int)countD;
-
   ObjArray* arr = newArray();
-  push(OBJ_VAL(arr)); // GC protect
+  push(OBJ_VAL(arr));
   for (int i = 0; i < count; i++) {
-    writeValueArray(&arr->elements, NUMBER_VAL(start + i * step));
+    writeValueArray(&arr->elements, DOUBLE_VAL(start + i * step));
   }
   pop();
   return OBJ_VAL(arr);
@@ -2120,7 +2215,7 @@ static Value collectionsEnumerateNative(int argCount, Value* args) {
   for (int i = 0; i < src->elements.count; i++) {
     ObjArray* pair = newArray();
     push(OBJ_VAL(pair)); // GC protect pair
-    writeValueArray(&pair->elements, NUMBER_VAL(i));
+    writeValueArray(&pair->elements, INT_VAL((int64_t)i));
     writeValueArray(&pair->elements, src->elements.values[i]);
     result = AS_ARRAY(vm.stackTop[-2]); // re-read after possible GC
     writeValueArray(&result->elements, OBJ_VAL(pair));
@@ -2707,7 +2802,7 @@ static bool regexMatchNative(Value receiver, int argCount, Value* args,
 
   valueTableSet(&map->entries,
                 OBJ_VAL(copyString("index", 5)),
-                NUMBER_VAL(r.matchStart));
+                INT_VAL((int64_t)r.matchStart));
 
   ObjArray* groups = newArray();
   push(OBJ_VAL(groups));
@@ -2757,7 +2852,7 @@ static bool regexMatchAllNative(Value receiver, int argCount, Value* args,
     pop();
     valueTableSet(&map->entries,
                   OBJ_VAL(copyString("index", 5)),
-                  NUMBER_VAL(r.matchStart));
+                  INT_VAL((int64_t)r.matchStart));
 
     ObjArray* groups = newArray();
     push(OBJ_VAL(groups));
@@ -2965,7 +3060,8 @@ void registerBuiltins(void) {
   defineNative("Map", mapConstructorNative);
   defineNative("Set", setConstructorNative);
   defineNative("toString", toStringNative);
-  defineNative("toNumber", toNumberNative);
+  defineNative("toInt", toIntNative);
+  defineNative("toDouble", toDoubleNative);
   defineNative("toBool", toBoolNative);
   defineNative("iter", iterNative);
 
@@ -2973,15 +3069,17 @@ void registerBuiltins(void) {
   // Note: nil/true/false are keywords so they can't be identifiers.
   {
     const char* typeNames[] = {
-      "number", "string", "bool", "array", "map", "set", "function"
+      "int", "double", "number", "string", "bool",
+      "array", "map", "set", "function"
     };
-    int typeLens[] = {6, 6, 4, 5, 3, 3, 8};
+    int typeLens[] = {3, 6, 6, 6, 4, 5, 3, 3, 8};
     TypeTag typeTags[] = {
-      TYPETAG_NUMBER, TYPETAG_STRING, TYPETAG_BOOL, TYPETAG_ARRAY,
+      TYPETAG_INT, TYPETAG_DOUBLE, TYPETAG_NUMBER,
+      TYPETAG_STRING, TYPETAG_BOOL, TYPETAG_ARRAY,
       TYPETAG_MAP, TYPETAG_SET, TYPETAG_FUNCTION
     };
     int i;
-    for (i = 0; i < 7; i++) {
+    for (i = 0; i < 9; i++) {
       ObjString* tname = copyString(typeNames[i], typeLens[i]);
       push(OBJ_VAL(tname));
       ObjTypeDescriptor* desc = newTypeDescriptor(typeTags[i], tname, NULL);
@@ -3018,10 +3116,10 @@ void registerBuiltins(void) {
   defineModuleNative(mathModule, "lerp", lerpNative);
   defineModuleNative(mathModule, "sign", signNative);
   defineModuleConstant(mathModule, "PI",
-                       NUMBER_VAL(3.14159265358979323846));
+                       DOUBLE_VAL(3.14159265358979323846));
   defineModuleConstant(mathModule, "E",
-                       NUMBER_VAL(2.71828182845904523536));
-  defineModuleConstant(mathModule, "INF", NUMBER_VAL(INFINITY));
+                       DOUBLE_VAL(2.71828182845904523536));
+  defineModuleConstant(mathModule, "INF", DOUBLE_VAL(INFINITY));
 
   // Built-in 'time' module.
   ObjModule* timeModule = registerBuiltinModule("time");

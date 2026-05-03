@@ -25,32 +25,16 @@ void freeValueTable(ValueTable* table) {
 }
 
 uint32_t hashValue(Value value) {
-#ifdef NAN_BOXING
-  if (IS_NIL(value)) return 0;
-  if (IS_BOOL(value)) return AS_BOOL(value) ? 1 : 0;
-  if (IS_NUMBER(value)) {
-    double num = AS_NUMBER(value);
-    uint64_t bits;
-    memcpy(&bits, &num, sizeof(bits));
-    return (uint32_t)(bits ^ (bits >> 32));
-  }
-  if (IS_OBJ(value)) {
-    Obj* obj = AS_OBJ(value);
-    if (obj->type == OBJ_STRING) {
-      return ((ObjString*)obj)->hash;
-    }
-    // Identity hash for other objects.
-    uintptr_t ptr = (uintptr_t)obj;
-    return (uint32_t)(ptr ^ (ptr >> 16));
-  }
-  return 0;
-#else
   switch (value.type) {
     case VAL_NIL: return 0;
     case VAL_BOOL: return value.as.boolean ? 1 : 0;
-    case VAL_NUMBER: {
+    case VAL_INT:
+    case VAL_DOUBLE: {
+      // Hash via double bit pattern so INT_VAL(1) and DOUBLE_VAL(1.0)
+      // produce the same hash (required since they compare equal).
+      double num = AS_DOUBLE_COERCE(value);
       uint64_t bits;
-      memcpy(&bits, &value.as.number, sizeof(bits));
+      memcpy(&bits, &num, sizeof(bits));
       return (uint32_t)(bits ^ (bits >> 32));
     }
     case VAL_OBJ: {
@@ -63,7 +47,6 @@ uint32_t hashValue(Value value) {
     }
   }
   return 0;
-#endif
 }
 
 // Parallel: table.c:findEntry

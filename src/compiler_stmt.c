@@ -126,7 +126,7 @@ static void arrayDestructure() {
     for (int i = 0; i < count; i++) {
       if (skip[i]) continue;
       emitBytes(OP_GET_LOCAL, (uint8_t)hiddenSlot);
-      emitConstant(NUMBER_VAL(i));
+      emitConstant(INT_VAL(i));
       emitByte(OP_INDEX_GET);
       declareVariableByName(&names[i]);
       markInitialized();
@@ -144,7 +144,7 @@ static void arrayDestructure() {
       if (i != lastNonSkipped) {
         emitBytes(OP_DUP, 0);
       }
-      emitConstant(NUMBER_VAL(i));
+      emitConstant(INT_VAL(i));
       emitByte(OP_INDEX_GET);
       uint8_t nameConst = identifierConstant(&names[i]);
       emitBytes(OP_DEFINE_GLOBAL, nameConst);
@@ -659,7 +659,7 @@ static void matchStatement() {
       Token lenTok = syntheticToken("length");
       uint8_t lenConst = identifierConstant(&lenTok);
       emitBytes(OP_GET_PROPERTY, lenConst);
-      emitConstant(NUMBER_VAL((double)nameCount));
+      emitConstant(INT_VAL((int64_t)nameCount));
       emitByte(OP_EQUAL);
       skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
       emitByte(OP_POP); // pop true
@@ -669,7 +669,7 @@ static void matchStatement() {
       hasBindingScope = true;
       for (int i = 0; i < nameCount; i++) {
         emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
-        emitConstant(NUMBER_VAL((double)i));
+        emitConstant(INT_VAL((int64_t)i));
         emitByte(OP_INDEX_GET);
         addLocal(names[i]);
         markInitialized();

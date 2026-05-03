@@ -3,12 +3,20 @@ print toString(42); // expect: 42
 print toString(true); // expect: true
 print toString(nil); // expect: nil
 
-// toNumber
-print toNumber(42); // expect: 42
-print toNumber("3.14"); // expect: 3.14
-print toNumber(true); // expect: 1
-print toNumber(false); // expect: 0
-print toNumber(nil); // expect: 0
+// toInt
+print toInt(42); // expect: 42
+print toInt(3.14); // expect: 3
+print toInt(true); // expect: 1
+print toInt(false); // expect: 0
+print toInt(nil); // expect: 0
+print toInt("123"); // expect: 123
+
+// toDouble
+print toDouble(42); // expect: 42
+print toDouble("3.14"); // expect: 3.14
+print toDouble(true); // expect: 1
+print toDouble(false); // expect: 0
+print toDouble(nil); // expect: 0
 
 // toBool
 print toBool(true); // expect: true
@@ -28,7 +36,7 @@ class Temp {
 
 var t = Temp(100);
 print toString(t); // expect: 100C
-print toNumber(t); // expect: 100
+print toDouble(t); // expect: 100
 print toBool(t); // expect: true
 
 var cold = Temp(-5);

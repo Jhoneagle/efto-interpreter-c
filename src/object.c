@@ -321,6 +321,8 @@ void printObject(Value value) {
 bool valueMatchesTypeDescriptor(Value value, ObjTypeDescriptor* desc) {
   switch (desc->tag) {
     case TYPETAG_ANY:      return true;
+    case TYPETAG_INT:      return IS_INT(value);
+    case TYPETAG_DOUBLE:   return IS_DOUBLE(value);
     case TYPETAG_NUMBER:   return IS_NUMBER(value);
     case TYPETAG_STRING:   return IS_STRING(value);
     case TYPETAG_BOOL:     return IS_BOOL(value);

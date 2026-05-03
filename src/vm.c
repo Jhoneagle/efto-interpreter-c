@@ -1,3 +1,5 @@
+#include <inttypes.h>
+#include <limits.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -15,18 +17,40 @@
 
 VM vm;
 
-// Convert double to int32 safely (JS-style ToInt32).
-// Handles NaN, infinity, and out-of-range values without UB.
-static inline int32_t toInt32(double d) {
-  if (!isfinite(d) || d == 0.0) return 0;
-  d = fmod(trunc(d), 4294967296.0);
-  if (d >= 2147483648.0) d -= 4294967296.0;
-  else if (d < -2147483648.0) d += 4294967296.0;
-  return (int32_t)d;
+// Overflow-checked int64 arithmetic. Returns true on overflow.
+static inline bool int64AddOverflow(int64_t a, int64_t b, int64_t* r) {
+#if defined(__GNUC__) || defined(__clang__)
+  return __builtin_add_overflow(a, b, r);
+#else
+  if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b))
+    return true;
+  *r = a + b; return false;
+#endif
 }
 
-static inline uint32_t toUint32(double d) {
-  return (uint32_t)toInt32(d);
+static inline bool int64SubOverflow(int64_t a, int64_t b, int64_t* r) {
+#if defined(__GNUC__) || defined(__clang__)
+  return __builtin_sub_overflow(a, b, r);
+#else
+  if ((b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b))
+    return true;
+  *r = a - b; return false;
+#endif
+}
+
+static inline bool int64MulOverflow(int64_t a, int64_t b, int64_t* r) {
+#if defined(__GNUC__) || defined(__clang__)
+  return __builtin_mul_overflow(a, b, r);
+#else
+  if (a > 0) {
+    if (b > 0) { if (a > INT64_MAX / b) return true; }
+    else       { if (b < INT64_MIN / a) return true; }
+  } else {
+    if (b > 0) { if (a < INT64_MIN / b) return true; }
+    else       { if (a != 0 && b < INT64_MAX / a) return true; }
+  }
+  *r = a * b; return false;
+#endif
 }
 
 static void closeUpvalues(Value* last);
@@ -86,7 +110,7 @@ static bool throwException(Value value) {
       push(value);
     } else {
       // HANDLER_FINALLY: push completion state (exception tag + value).
-      push(NUMBER_VAL(COMPLETE_EXCEPTION));
+      push(INT_VAL(COMPLETE_EXCEPTION));
       push(value);
     }
 
@@ -111,9 +135,15 @@ ObjString* stringify(Value value) {
   if (IS_BOOL(value)) return AS_BOOL(value) ?
       copyString("true", 4) : copyString("false", 5);
 
-  if (IS_NUMBER(value)) {
+  if (IS_INT(value)) {
     char buffer[24];
-    int len = snprintf(buffer, sizeof(buffer), "%g", AS_NUMBER(value));
+    int len = snprintf(buffer, sizeof(buffer), "%" PRId64, AS_INT(value));
+    return copyString(buffer, len);
+  }
+
+  if (IS_DOUBLE(value)) {
+    char buffer[24];
+    int len = snprintf(buffer, sizeof(buffer), "%g", AS_DOUBLE(value));
     return copyString(buffer, len);
   }
 
@@ -761,7 +791,7 @@ static bool executeGetProperty(ObjString* name) {
 
     if (name == vm.lengthString) {
       pop();
-      push(NUMBER_VAL(string->length));
+      push(INT_VAL((int64_t)string->length));
       return true;
     }
 
@@ -774,7 +804,7 @@ static bool executeGetProperty(ObjString* name) {
 
     if (name == vm.lengthString) {
       pop();
-      push(NUMBER_VAL(array->elements.count));
+      push(INT_VAL((int64_t)array->elements.count));
       return true;
     }
 
@@ -787,7 +817,7 @@ static bool executeGetProperty(ObjString* name) {
 
     if (name == vm.sizeString) {
       pop();
-      push(NUMBER_VAL(map->entries.liveCount));
+      push(INT_VAL((int64_t)map->entries.liveCount));
       return true;
     }
 
@@ -800,7 +830,7 @@ static bool executeGetProperty(ObjString* name) {
 
     if (name == vm.sizeString) {
       pop();
-      push(NUMBER_VAL(set->entries.liveCount));
+      push(INT_VAL((int64_t)set->entries.liveCount));
       return true;
     }
 
@@ -833,13 +863,13 @@ static bool executeIndexGet(void) {
   Value receiver = pop();
 
   if (IS_ARRAY(receiver)) {
-    if (!IS_NUMBER(index)) {
-      runtimeError("Array index must be a number.");
+    if (!IS_INT(index)) {
+      runtimeError("Array index must be an integer.");
       return false;
     }
 
     ObjArray* array = AS_ARRAY(receiver);
-    int i = (int)AS_NUMBER(index);
+    int i = (int)AS_INT(index);
 
     if (i < 0 || i >= array->elements.count) {
       runtimeError("Array index %d out of bounds [0, %d).",
@@ -871,13 +901,13 @@ static bool executeIndexSet(void) {
   Value receiver = pop();
 
   if (IS_ARRAY(receiver)) {
-    if (!IS_NUMBER(index)) {
-      runtimeError("Array index must be a number.");
+    if (!IS_INT(index)) {
+      runtimeError("Array index must be an integer.");
       return false;
     }
 
     ObjArray* array = AS_ARRAY(receiver);
-    int i = (int)AS_NUMBER(index);
+    int i = (int)AS_INT(index);
 
     if (i < 0 || i >= array->elements.count) {
       runtimeError("Array index %d out of bounds [0, %d).",
@@ -1163,9 +1193,13 @@ static InterpretResult run(int baseFrame) {
         break;
       }
       case OP_GREATER: {
-        if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
-          double b = AS_NUMBER(pop());
-          double a = AS_NUMBER(pop());
+        if (IS_INT(peek(0)) && IS_INT(peek(1))) {
+          int64_t b = AS_INT(pop());
+          int64_t a = AS_INT(pop());
+          push(BOOL_VAL(a > b));
+        } else if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
+          double b = AS_DOUBLE_COERCE(pop());
+          double a = AS_DOUBLE_COERCE(pop());
           push(BOOL_VAL(a > b));
         } else {
           Value b = pop();
@@ -1176,7 +1210,7 @@ static InterpretResult run(int baseFrame) {
               runtimeError("__cmp__ must return a number.");
               return INTERPRET_RUNTIME_ERROR;
             }
-            push(BOOL_VAL(AS_NUMBER(result) > 0));
+            push(BOOL_VAL(AS_DOUBLE_COERCE(result) > 0));
           } else if (vm.frameCount == 0) {
             return INTERPRET_RUNTIME_ERROR;
           } else {
@@ -1187,9 +1221,13 @@ static InterpretResult run(int baseFrame) {
         break;
       }
       case OP_LESS: {
-        if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
-          double b = AS_NUMBER(pop());
-          double a = AS_NUMBER(pop());
+        if (IS_INT(peek(0)) && IS_INT(peek(1))) {
+          int64_t b = AS_INT(pop());
+          int64_t a = AS_INT(pop());
+          push(BOOL_VAL(a < b));
+        } else if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
+          double b = AS_DOUBLE_COERCE(pop());
+          double a = AS_DOUBLE_COERCE(pop());
           push(BOOL_VAL(a < b));
         } else {
           Value b = pop();
@@ -1200,7 +1238,7 @@ static InterpretResult run(int baseFrame) {
               runtimeError("__cmp__ must return a number.");
               return INTERPRET_RUNTIME_ERROR;
             }
-            push(BOOL_VAL(AS_NUMBER(result) < 0));
+            push(BOOL_VAL(AS_DOUBLE_COERCE(result) < 0));
           } else if (vm.frameCount == 0) {
             return INTERPRET_RUNTIME_ERROR;
           } else {
@@ -1213,10 +1251,19 @@ static InterpretResult run(int baseFrame) {
       case OP_ADD: {
         if (IS_STRING(peek(0)) && IS_STRING(peek(1))) {
           concatenate();
+        } else if (IS_INT(peek(0)) && IS_INT(peek(1))) {
+          int64_t b = AS_INT(pop());
+          int64_t a = AS_INT(pop());
+          int64_t r;
+          if (int64AddOverflow(a, b, &r)) {
+            runtimeError("Integer overflow.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
+          push(INT_VAL(r));
         } else if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
-          double b = AS_NUMBER(pop());
-          double a = AS_NUMBER(pop());
-          push(NUMBER_VAL(a + b));
+          double b = AS_DOUBLE_COERCE(pop());
+          double a = AS_DOUBLE_COERCE(pop());
+          push(DOUBLE_VAL(a + b));
         } else {
           Value b = pop();
           Value a = pop();
@@ -1234,10 +1281,19 @@ static InterpretResult run(int baseFrame) {
         break;
       }
       case OP_SUBTRACT: {
-        if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
-          double b = AS_NUMBER(pop());
-          double a = AS_NUMBER(pop());
-          push(NUMBER_VAL(a - b));
+        if (IS_INT(peek(0)) && IS_INT(peek(1))) {
+          int64_t b = AS_INT(pop());
+          int64_t a = AS_INT(pop());
+          int64_t r;
+          if (int64SubOverflow(a, b, &r)) {
+            runtimeError("Integer overflow.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
+          push(INT_VAL(r));
+        } else if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
+          double b = AS_DOUBLE_COERCE(pop());
+          double a = AS_DOUBLE_COERCE(pop());
+          push(DOUBLE_VAL(a - b));
         } else {
           Value b = pop();
           Value a = pop();
@@ -1254,10 +1310,19 @@ static InterpretResult run(int baseFrame) {
         break;
       }
       case OP_MULTIPLY: {
-        if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
-          double b = AS_NUMBER(pop());
-          double a = AS_NUMBER(pop());
-          push(NUMBER_VAL(a * b));
+        if (IS_INT(peek(0)) && IS_INT(peek(1))) {
+          int64_t b = AS_INT(pop());
+          int64_t a = AS_INT(pop());
+          int64_t r;
+          if (int64MulOverflow(a, b, &r)) {
+            runtimeError("Integer overflow.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
+          push(INT_VAL(r));
+        } else if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
+          double b = AS_DOUBLE_COERCE(pop());
+          double a = AS_DOUBLE_COERCE(pop());
+          push(DOUBLE_VAL(a * b));
         } else {
           Value b = pop();
           Value a = pop();
@@ -1274,10 +1339,22 @@ static InterpretResult run(int baseFrame) {
         break;
       }
       case OP_DIVIDE: {
-        if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
-          double b = AS_NUMBER(pop());
-          double a = AS_NUMBER(pop());
-          push(NUMBER_VAL(a / b));
+        if (IS_INT(peek(0)) && IS_INT(peek(1))) {
+          int64_t b = AS_INT(pop());
+          int64_t a = AS_INT(pop());
+          if (b == 0) {
+            runtimeError("Division by zero.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
+          if (a == INT64_MIN && b == -1) {
+            runtimeError("Integer overflow.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
+          push(INT_VAL(a / b));
+        } else if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
+          double b = AS_DOUBLE_COERCE(pop());
+          double a = AS_DOUBLE_COERCE(pop());
+          push(DOUBLE_VAL(a / b));
         } else {
           Value b = pop();
           Value a = pop();
@@ -1294,10 +1371,18 @@ static InterpretResult run(int baseFrame) {
         break;
       }
       case OP_MODULO: {
-        if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
-          double b = AS_NUMBER(pop());
-          double a = AS_NUMBER(pop());
-          push(NUMBER_VAL(fmod(a, b)));
+        if (IS_INT(peek(0)) && IS_INT(peek(1))) {
+          int64_t b = AS_INT(pop());
+          int64_t a = AS_INT(pop());
+          if (b == 0) {
+            runtimeError("Division by zero.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
+          push(INT_VAL(a % b));
+        } else if (IS_NUMBER(peek(0)) && IS_NUMBER(peek(1))) {
+          double b = AS_DOUBLE_COERCE(pop());
+          double a = AS_DOUBLE_COERCE(pop());
+          push(DOUBLE_VAL(fmod(a, b)));
         } else {
           Value b = pop();
           Value a = pop();
@@ -1317,8 +1402,15 @@ static InterpretResult run(int baseFrame) {
         push(BOOL_VAL(isFalsey(pop())));
         break;
       case OP_NEGATE: {
-        if (IS_NUMBER(peek(0))) {
-          push(NUMBER_VAL(-AS_NUMBER(pop())));
+        if (IS_INT(peek(0))) {
+          int64_t a = AS_INT(pop());
+          if (a == INT64_MIN) {
+            runtimeError("Integer overflow.");
+            return INTERPRET_RUNTIME_ERROR;
+          }
+          push(INT_VAL(-a));
+        } else if (IS_DOUBLE(peek(0))) {
+          push(DOUBLE_VAL(-AS_DOUBLE(pop())));
         } else {
           Value operand = pop();
           Value result;
@@ -1334,62 +1426,62 @@ static InterpretResult run(int baseFrame) {
         break;
       }
       case OP_BITWISE_AND: {
-        if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) {
-          runtimeError("Operands must be numbers.");
+        if (!IS_INT(peek(0)) || !IS_INT(peek(1))) {
+          runtimeError("Bitwise operands must be integers.");
           return INTERPRET_RUNTIME_ERROR;
         }
-        int32_t b = toInt32(AS_NUMBER(pop()));
-        int32_t a = toInt32(AS_NUMBER(pop()));
-        push(NUMBER_VAL((double)(a & b)));
+        int64_t b = AS_INT(pop());
+        int64_t a = AS_INT(pop());
+        push(INT_VAL(a & b));
         break;
       }
       case OP_BITWISE_OR: {
-        if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) {
-          runtimeError("Operands must be numbers.");
+        if (!IS_INT(peek(0)) || !IS_INT(peek(1))) {
+          runtimeError("Bitwise operands must be integers.");
           return INTERPRET_RUNTIME_ERROR;
         }
-        int32_t b = toInt32(AS_NUMBER(pop()));
-        int32_t a = toInt32(AS_NUMBER(pop()));
-        push(NUMBER_VAL((double)(a | b)));
+        int64_t b = AS_INT(pop());
+        int64_t a = AS_INT(pop());
+        push(INT_VAL(a | b));
         break;
       }
       case OP_BITWISE_XOR: {
-        if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) {
-          runtimeError("Operands must be numbers.");
+        if (!IS_INT(peek(0)) || !IS_INT(peek(1))) {
+          runtimeError("Bitwise operands must be integers.");
           return INTERPRET_RUNTIME_ERROR;
         }
-        int32_t b = toInt32(AS_NUMBER(pop()));
-        int32_t a = toInt32(AS_NUMBER(pop()));
-        push(NUMBER_VAL((double)(a ^ b)));
+        int64_t b = AS_INT(pop());
+        int64_t a = AS_INT(pop());
+        push(INT_VAL(a ^ b));
         break;
       }
       case OP_BITWISE_NOT: {
-        if (!IS_NUMBER(peek(0))) {
-          runtimeError("Operand must be a number.");
+        if (!IS_INT(peek(0))) {
+          runtimeError("Bitwise operand must be an integer.");
           return INTERPRET_RUNTIME_ERROR;
         }
-        int32_t a = toInt32(AS_NUMBER(pop()));
-        push(NUMBER_VAL((double)(~a)));
+        int64_t a = AS_INT(pop());
+        push(INT_VAL(~a));
         break;
       }
       case OP_LEFT_SHIFT: {
-        if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) {
-          runtimeError("Operands must be numbers.");
+        if (!IS_INT(peek(0)) || !IS_INT(peek(1))) {
+          runtimeError("Bitwise operands must be integers.");
           return INTERPRET_RUNTIME_ERROR;
         }
-        uint32_t b = toUint32(AS_NUMBER(pop())) & 31;
-        uint32_t a = toUint32(AS_NUMBER(pop()));
-        push(NUMBER_VAL((double)(int32_t)(a << b)));
+        int64_t b = AS_INT(pop()) & 63;
+        int64_t a = AS_INT(pop());
+        push(INT_VAL((int64_t)((uint64_t)a << b)));
         break;
       }
       case OP_RIGHT_SHIFT: {
-        if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) {
-          runtimeError("Operands must be numbers.");
+        if (!IS_INT(peek(0)) || !IS_INT(peek(1))) {
+          runtimeError("Bitwise operands must be integers.");
           return INTERPRET_RUNTIME_ERROR;
         }
-        uint32_t b = toUint32(AS_NUMBER(pop())) & 31;
-        int32_t a = toInt32(AS_NUMBER(pop()));
-        push(NUMBER_VAL((double)(a >> b)));
+        int64_t b = AS_INT(pop()) & 63;
+        int64_t a = AS_INT(pop());
+        push(INT_VAL(a >> b));
         break;
       }
       case OP_TYPEOF: {
@@ -1785,13 +1877,13 @@ static InterpretResult run(int baseFrame) {
           closeUpvalues(handler->stackTop);
           vm.stackTop = handler->stackTop;
         }
-        push(NUMBER_VAL((double)completionType));
+        push(INT_VAL((int64_t)completionType));
         push(payload);
         break;
       }
       case OP_END_FINALLY: {
         Value payload = pop();
-        int tag = (int)AS_NUMBER(pop());
+        int tag = (int)AS_INT(pop());
         switch (tag) {
           case COMPLETE_NORMAL:
             break;
@@ -1816,7 +1908,7 @@ static InterpretResult run(int baseFrame) {
           case COMPLETE_BREAK:
           case COMPLETE_CONTINUE:
             frame->ip = frame->closure->function->chunk.code +
-                        (int)AS_NUMBER(payload);
+                        (int)AS_INT(payload);
             break;
         }
         break;

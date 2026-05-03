@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -359,8 +360,23 @@ static void parenOrArrow(bool canAssign) {
 }
 
 static void number(bool canAssign) {
-  double value = strtod(parser.previous.start, NULL);
-  emitConstant(NUMBER_VAL(value));
+  // Check if the literal contains a '.' to distinguish int vs double.
+  bool isDouble = false;
+  for (int i = 0; i < parser.previous.length; i++) {
+    if (parser.previous.start[i] == '.') { isDouble = true; break; }
+  }
+  if (isDouble) {
+    double value = strtod(parser.previous.start, NULL);
+    emitConstant(DOUBLE_VAL(value));
+  } else {
+    errno = 0;
+    int64_t value = strtoll(parser.previous.start, NULL, 10);
+    if (errno == ERANGE) {
+      error("Integer literal out of range.");
+      return;
+    }
+    emitConstant(INT_VAL(value));
+  }
 }
 
 static void string(bool canAssign) {
