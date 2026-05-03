@@ -1,0 +1,90 @@
+import regex;
+
+// Basic literal match.
+var r = regex.compile("hello");
+print r.test("hello world");
+// expect: true
+
+print r.test("goodbye");
+// expect: false
+
+// Dot matches any character.
+var dot = regex.compile("h.llo");
+print dot.test("hello");
+// expect: true
+print dot.test("hallo");
+// expect: true
+
+// Quantifiers: * + ?
+var star = regex.compile("ab*c");
+print star.test("ac");
+// expect: true
+print star.test("abc");
+// expect: true
+print star.test("abbbc");
+// expect: true
+
+var plus = regex.compile("ab+c");
+print plus.test("ac");
+// expect: false
+print plus.test("abc");
+// expect: true
+print plus.test("abbbc");
+// expect: true
+
+var quest = regex.compile("colou?r");
+print quest.test("color");
+// expect: true
+print quest.test("colour");
+// expect: true
+
+// Alternation.
+var alt = regex.compile("cat|dog");
+print alt.test("I have a cat");
+// expect: true
+print alt.test("I have a dog");
+// expect: true
+print alt.test("I have a fish");
+// expect: false
+
+// Anchors.
+var start = regex.compile("^hello");
+print start.test("hello world");
+// expect: true
+print start.test("say hello");
+// expect: false
+
+var end = regex.compile("world$");
+print end.test("hello world");
+// expect: true
+print end.test("world hello");
+// expect: false
+
+// Character classes.
+var digits = regex.compile("[0-9]+");
+print digits.test("abc123");
+// expect: true
+print digits.test("abcdef");
+// expect: false
+
+// Negated character class.
+var nonDigit = regex.compile("^[^0-9]+$");
+print nonDigit.test("hello");
+// expect: true
+print nonDigit.test("hello123");
+// expect: false
+
+// Shorthand classes.
+var d = regex.compile("\\d+");
+print d.test("abc123");
+// expect: true
+
+var w = regex.compile("^\\w+$");
+print w.test("hello_world");
+// expect: true
+print w.test("hello world");
+// expect: false
+
+// Type check.
+print typeof r;
+// expect: regex

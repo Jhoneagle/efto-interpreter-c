@@ -13,6 +13,7 @@
 #endif
 
 #include "builtins.h"
+#include "regex_engine.h"
 #include "common.h"
 #include "memory.h"
 #include "object.h"
@@ -1313,6 +1314,8 @@ ObjString* typeOfValue(Value value) {
       case OBJ_SET:           return copyString("set", 3);
       case OBJ_CLASS:         return copyString("class", 5);
       case OBJ_FILE:          return copyString("file", 4);
+      case OBJ_ITERATOR:      return copyString("iterator", 8);
+      case OBJ_REGEX:         return copyString("regex", 5);
       case OBJ_INSTANCE:      return copyString("instance", 8);
       case OBJ_MODULE:        return copyString("module", 6);
       case OBJ_FUNCTION:
@@ -2636,6 +2639,247 @@ static void defineNativeMethodVar(ObjClass* klass, const char* name,
 
 // --- Public registration function ---
 
+// --- Regex native methods ---
+
+static Value regexCompileNative(int argCount, Value* args) {
+  if (argCount < 1 || !IS_STRING(args[0])) {
+    runtimeError("regex.compile() expects a string pattern.");
+    return NIL_VAL;
+  }
+  ObjString* pattern = AS_STRING(args[0]);
+  int flags = 0;
+  if (argCount >= 2 && IS_STRING(args[1])) {
+    const char* f = AS_CSTRING(args[1]);
+    for (int i = 0; f[i]; i++) {
+      if (f[i] == 'i') flags |= REGEX_ICASE;
+      if (f[i] == 'm') flags |= REGEX_MULTILINE;
+      if (f[i] == 's') flags |= REGEX_DOTALL;
+    }
+  }
+  char errorBuf[256];
+  CompiledRegex* compiled =
+      regexCompile(pattern->chars, flags, errorBuf, sizeof(errorBuf));
+  if (compiled == NULL) {
+    runtimeError("Regex compilation error: %s", errorBuf);
+    return NIL_VAL;
+  }
+  push(OBJ_VAL(pattern));
+  ObjRegex* regex = newRegex(pattern, flags, compiled);
+  pop();
+  return OBJ_VAL(regex);
+}
+
+static bool regexTestNative(Value receiver, int argCount, Value* args,
+                            Value* result) {
+  ObjRegex* re = AS_REGEX(receiver);
+  if (!IS_STRING(args[0])) {
+    runtimeError("regex.test() expects a string.");
+    return false;
+  }
+  RegexResult r = regexExec(re->compiled, AS_CSTRING(args[0]), 0);
+  *result = BOOL_VAL(r.matched);
+  return true;
+}
+
+static bool regexMatchNative(Value receiver, int argCount, Value* args,
+                             Value* result) {
+  ObjRegex* re = AS_REGEX(receiver);
+  if (!IS_STRING(args[0])) {
+    runtimeError("regex.match() expects a string.");
+    return false;
+  }
+  const char* text = AS_CSTRING(args[0]);
+  RegexResult r = regexExec(re->compiled, text, 0);
+  if (!r.matched) {
+    *result = NIL_VAL;
+    return true;
+  }
+
+  ObjMap* map = newMap();
+  push(OBJ_VAL(map));
+
+  ObjString* matchStr =
+      copyString(text + r.matchStart, r.matchEnd - r.matchStart);
+  push(OBJ_VAL(matchStr));
+  valueTableSet(&map->entries,
+                OBJ_VAL(copyString("match", 5)), OBJ_VAL(matchStr));
+  pop();
+
+  valueTableSet(&map->entries,
+                OBJ_VAL(copyString("index", 5)),
+                NUMBER_VAL(r.matchStart));
+
+  ObjArray* groups = newArray();
+  push(OBJ_VAL(groups));
+  for (int g = 0; g < r.groupCount; g++) {
+    if (r.groupStart[g] >= 0 && r.groupEnd[g] >= 0) {
+      ObjString* gs = copyString(text + r.groupStart[g],
+                                  r.groupEnd[g] - r.groupStart[g]);
+      writeValueArray(&groups->elements, OBJ_VAL(gs));
+    } else {
+      writeValueArray(&groups->elements, NIL_VAL);
+    }
+  }
+  valueTableSet(&map->entries,
+                OBJ_VAL(copyString("groups", 6)), OBJ_VAL(groups));
+  pop(); // groups
+  pop(); // map
+  *result = OBJ_VAL(map);
+  return true;
+}
+
+static bool regexMatchAllNative(Value receiver, int argCount, Value* args,
+                                Value* result) {
+  ObjRegex* re = AS_REGEX(receiver);
+  if (!IS_STRING(args[0])) {
+    runtimeError("regex.matchAll() expects a string.");
+    return false;
+  }
+  const char* text = AS_CSTRING(args[0]);
+  int textLen = (int)strlen(text);
+
+  ObjArray* results = newArray();
+  push(OBJ_VAL(results));
+
+  int pos = 0;
+  while (pos <= textLen) {
+    RegexResult r = regexExec(re->compiled, text, pos);
+    if (!r.matched) break;
+
+    ObjMap* map = newMap();
+    push(OBJ_VAL(map));
+
+    ObjString* matchStr =
+        copyString(text + r.matchStart, r.matchEnd - r.matchStart);
+    push(OBJ_VAL(matchStr));
+    valueTableSet(&map->entries,
+                  OBJ_VAL(copyString("match", 5)), OBJ_VAL(matchStr));
+    pop();
+    valueTableSet(&map->entries,
+                  OBJ_VAL(copyString("index", 5)),
+                  NUMBER_VAL(r.matchStart));
+
+    ObjArray* groups = newArray();
+    push(OBJ_VAL(groups));
+    for (int g = 0; g < r.groupCount; g++) {
+      if (r.groupStart[g] >= 0 && r.groupEnd[g] >= 0) {
+        ObjString* gs = copyString(text + r.groupStart[g],
+                                    r.groupEnd[g] - r.groupStart[g]);
+        writeValueArray(&groups->elements, OBJ_VAL(gs));
+      } else {
+        writeValueArray(&groups->elements, NIL_VAL);
+      }
+    }
+    valueTableSet(&map->entries,
+                  OBJ_VAL(copyString("groups", 6)), OBJ_VAL(groups));
+    pop(); // groups
+    pop(); // map
+
+    writeValueArray(&results->elements, OBJ_VAL(map));
+
+    // Advance past this match (at least 1 char to avoid infinite loop).
+    pos = r.matchEnd > pos ? r.matchEnd : pos + 1;
+  }
+
+  pop(); // results
+  *result = OBJ_VAL(results);
+  return true;
+}
+
+static bool regexReplaceNative(Value receiver, int argCount, Value* args,
+                               Value* result) {
+  ObjRegex* re = AS_REGEX(receiver);
+  if (!IS_STRING(args[0]) || !IS_STRING(args[1])) {
+    runtimeError("regex.replace() expects two strings.");
+    return false;
+  }
+  const char* text = AS_CSTRING(args[0]);
+  const char* replacement = AS_CSTRING(args[1]);
+  int repLen = (int)strlen(replacement);
+
+  RegexResult r = regexExec(re->compiled, text, 0);
+  if (!r.matched) {
+    *result = OBJ_VAL(copyString(text, (int)strlen(text)));
+    return true;
+  }
+
+  int prefixLen = r.matchStart;
+  int suffixLen = (int)strlen(text) - r.matchEnd;
+  int totalLen = prefixLen + repLen + suffixLen;
+
+  char* buf = (char*)malloc(totalLen + 1);
+  memcpy(buf, text, prefixLen);
+  memcpy(buf + prefixLen, replacement, repLen);
+  memcpy(buf + prefixLen + repLen, text + r.matchEnd, suffixLen);
+  buf[totalLen] = '\0';
+
+  *result = OBJ_VAL(takeString(buf, totalLen));
+  return true;
+}
+
+static bool regexSplitNative(Value receiver, int argCount, Value* args,
+                             Value* result) {
+  ObjRegex* re = AS_REGEX(receiver);
+  if (!IS_STRING(args[0])) {
+    runtimeError("regex.split() expects a string.");
+    return false;
+  }
+  const char* text = AS_CSTRING(args[0]);
+  int textLen = (int)strlen(text);
+
+  ObjArray* parts = newArray();
+  push(OBJ_VAL(parts));
+
+  int pos = 0;
+  while (pos <= textLen) {
+    RegexResult r = regexExec(re->compiled, text, pos);
+    if (!r.matched) {
+      ObjString* rest = copyString(text + pos, textLen - pos);
+      writeValueArray(&parts->elements, OBJ_VAL(rest));
+      break;
+    }
+
+    ObjString* before = copyString(text + pos, r.matchStart - pos);
+    writeValueArray(&parts->elements, OBJ_VAL(before));
+
+    pos = r.matchEnd > pos ? r.matchEnd : pos + 1;
+  }
+
+  pop(); // parts
+  *result = OBJ_VAL(parts);
+  return true;
+}
+
+// --- Iterator native methods ---
+
+static bool collectionIter(Value receiver, int argCount, Value* args,
+                           Value* result) {
+  push(receiver);
+  ObjIterator* iter = newIterator(receiver);
+  pop();
+  *result = OBJ_VAL(iter);
+  return true;
+}
+
+static bool iteratorSelf(Value receiver, int argCount, Value* args,
+                         Value* result) {
+  *result = receiver;
+  return true;
+}
+
+
+static Value iterNative(int argCount, Value* args) {
+  if (argCount < 1) {
+    runtimeError("iter() expects 1 argument.");
+    return NIL_VAL;
+  }
+  Value collection = args[0];
+  push(collection);
+  ObjIterator* iter = newIterator(collection);
+  pop();
+  return OBJ_VAL(iter);
+}
+
 void registerBuiltins(void) {
   vm.arrayMethods = NULL;
   vm.arrayMethods = newClass(copyString("Array", 5));
@@ -2655,6 +2899,7 @@ void registerBuiltins(void) {
   defineNativeMethod(vm.arrayMethods, "join", arrayJoin, 1);
   defineNativeMethod(vm.arrayMethods, "flat", arrayFlat, 0);
   defineNativeMethod(vm.arrayMethods, "indexOf", arrayIndexOf, 1);
+  defineNativeMethod(vm.arrayMethods, "__iter__", collectionIter, 0);
 
   vm.mapMethods = NULL;
   vm.mapMethods = newClass(copyString("Map", 3));
@@ -2669,6 +2914,7 @@ void registerBuiltins(void) {
   defineNativeMethod(vm.mapMethods, "find", mapFind, 1);
   defineNativeMethod(vm.mapMethods, "any", mapAny, 1);
   defineNativeMethod(vm.mapMethods, "all", mapAll, 1);
+  defineNativeMethod(vm.mapMethods, "__iter__", collectionIter, 0);
 
   vm.setMethods = NULL;
   vm.setMethods = newClass(copyString("Set", 3));
@@ -2681,6 +2927,11 @@ void registerBuiltins(void) {
   defineNativeMethod(vm.setMethods, "union", setUnion, 1);
   defineNativeMethod(vm.setMethods, "intersection", setIntersection, 1);
   defineNativeMethod(vm.setMethods, "difference", setDifference, 1);
+  defineNativeMethod(vm.setMethods, "__iter__", collectionIter, 0);
+
+  vm.iteratorMethods = NULL;
+  vm.iteratorMethods = newClass(copyString("Iterator", 8));
+  defineNativeMethod(vm.iteratorMethods, "__iter__", iteratorSelf, 0);
 
   vm.fileMethods = NULL;
   vm.fileMethods = newClass(copyString("File", 4));
@@ -2716,6 +2967,7 @@ void registerBuiltins(void) {
   defineNative("toString", toStringNative);
   defineNative("toNumber", toNumberNative);
   defineNative("toBool", toBoolNative);
+  defineNative("iter", iterNative);
 
   // Register primitive type descriptors as globals.
   // Note: nil/true/false are keywords so they can't be identifiers.
@@ -2830,8 +3082,25 @@ void registerBuiltins(void) {
     ObjClass* ioError = createErrorSubclass("IOError", errorBaseClass);
     defineModuleValue(errorModule, "IOError", OBJ_VAL(ioError));
 
+    vm.stopIterationClass =
+        createErrorSubclass("StopIteration", errorBaseClass);
+    defineModuleValue(errorModule, "StopIteration",
+                      OBJ_VAL(vm.stopIterationClass));
+
     defineModuleNative(errorModule, "isError", isErrorNative);
   }
+
+  // --- regex module ---
+  ObjModule* regexModule = registerBuiltinModule("regex");
+  defineModuleNative(regexModule, "compile", regexCompileNative);
+
+  vm.regexMethods = NULL;
+  vm.regexMethods = newClass(copyString("Regex", 5));
+  defineNativeMethod(vm.regexMethods, "test", regexTestNative, 1);
+  defineNativeMethod(vm.regexMethods, "find", regexMatchNative, 1);
+  defineNativeMethod(vm.regexMethods, "findAll", regexMatchAllNative, 1);
+  defineNativeMethod(vm.regexMethods, "replace", regexReplaceNative, 2);
+  defineNativeMethod(vm.regexMethods, "split", regexSplitNative, 1);
 
   srand((unsigned int)time(NULL));
 }

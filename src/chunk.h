@@ -64,6 +64,13 @@ typedef enum {
   OP_CALL_SPREAD,
   OP_INVOKE_SPREAD,
   OP_CHECK_TYPE,
+  OP_ITERATE,
+  OP_BITWISE_AND,
+  OP_BITWISE_OR,
+  OP_BITWISE_XOR,
+  OP_BITWISE_NOT,
+  OP_LEFT_SHIFT,
+  OP_RIGHT_SHIFT,
 } OpCode;
 
 typedef struct {

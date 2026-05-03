@@ -367,10 +367,24 @@ Token scanToken() {
       if (match('>')) return makeToken(TOKEN_ARROW);
       return makeToken(
           match('=') ? TOKEN_EQUAL_EQUAL : TOKEN_EQUAL);
+    case '&':
+      return makeToken(
+          match('=') ? TOKEN_AMPERSAND_EQUAL : TOKEN_AMPERSAND);
+    case '|':
+      return makeToken(
+          match('=') ? TOKEN_PIPE_EQUAL : TOKEN_PIPE);
+    case '^':
+      return makeToken(
+          match('=') ? TOKEN_CARET_EQUAL : TOKEN_CARET);
+    case '~': return makeToken(TOKEN_TILDE);
     case '<':
+      if (match('<')) return makeToken(
+          match('=') ? TOKEN_LEFT_SHIFT_EQUAL : TOKEN_LEFT_SHIFT);
       return makeToken(
           match('=') ? TOKEN_LESS_EQUAL : TOKEN_LESS);
     case '>':
+      if (match('>')) return makeToken(
+          match('=') ? TOKEN_RIGHT_SHIFT_EQUAL : TOKEN_RIGHT_SHIFT);
       return makeToken(
           match('=') ? TOKEN_GREATER_EQUAL : TOKEN_GREATER);
     case '"': return string();

@@ -15,6 +15,9 @@
 #define IS_SET(value)          isObjType(value, OBJ_SET)
 #define IS_TYPE_DESCRIPTOR(value) isObjType(value, OBJ_TYPE_DESCRIPTOR)
 #define IS_FILE(value)         isObjType(value, OBJ_FILE)
+#define IS_ITERATOR(value)     isObjType(value, OBJ_ITERATOR)
+#define IS_REGEX(value)        isObjType(value, OBJ_REGEX)
+#define AS_REGEX(value)        ((ObjRegex*)AS_OBJ(value))
 #define IS_MAP(value)          isObjType(value, OBJ_MAP)
 #define IS_MODULE(value)       isObjType(value, OBJ_MODULE)
 #define IS_BOUND_METHOD(value) isObjType(value, OBJ_BOUND_METHOD)
@@ -42,11 +45,13 @@
 #define AS_NATIVE_METHOD(value) ((ObjNativeMethod*)AS_OBJ(value))
 #define AS_STRING(value)       ((ObjString*)AS_OBJ(value))
 #define AS_CSTRING(value)      (((ObjString*)AS_OBJ(value))->chars)
+#define AS_ITERATOR(value)     ((ObjIterator*)AS_OBJ(value))
 
 typedef enum {
   OBJ_ARRAY,
   OBJ_BOUND_METHOD,
   OBJ_FILE,
+  OBJ_ITERATOR,
   OBJ_MODULE,
   OBJ_CLASS,
   OBJ_CLOSURE,
@@ -55,6 +60,7 @@ typedef enum {
   OBJ_MAP,
   OBJ_NATIVE,
   OBJ_NATIVE_METHOD,
+  OBJ_REGEX,
   OBJ_SET,
   OBJ_TYPE_DESCRIPTOR,
   OBJ_UPVALUE,
@@ -109,6 +115,19 @@ typedef struct {
   ObjString* mode;
   ObjString* path;
 } ObjFile;
+
+typedef struct {
+  Obj obj;
+  Value source;
+  int index;
+} ObjIterator;
+
+typedef struct {
+  Obj obj;
+  ObjString* pattern;
+  int flags;
+  void* compiled;
+} ObjRegex;
 
 typedef struct {
   Obj obj;
@@ -197,6 +216,8 @@ struct ObjTypeDescriptor {
 ObjArray* newArray();
 ObjSet* newSet();
 ObjFile* newFile(FILE* file, ObjString* path, ObjString* mode);
+ObjIterator* newIterator(Value source);
+ObjRegex* newRegex(ObjString* pattern, int flags, void* compiled);
 ObjMap* newMap();
 ObjModule* newModule(ObjString* name, ObjString* path);
 ObjBoundMethod* newBoundMethod(Value receiver,

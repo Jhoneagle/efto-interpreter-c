@@ -1,0 +1,71 @@
+// Simple guard — false guard skips arm.
+match (42) {
+  42 if false => print "no";
+  42 if true => print "yes";
+  _ => print "default";
+}
+// expect: yes
+
+// Guard with array binding.
+match ([3, 4]) {
+  [x, y] if x > 5 => print "big";
+  [x, y] if x <= 5 => {
+    print x + y;
+  }
+  _ => print "other";
+}
+// expect: 7
+
+// Guard with map binding.
+var p = {"name": "Alice", "age": 30};
+match (p) {
+  {name, age} if age < 18 => print "minor";
+  {name, age} if age >= 18 => print name;
+}
+// expect: Alice
+
+// Multiple arms, first guard fails, second matches.
+match (10) {
+  10 if false => print "no";
+  10 if true => print "yes";
+}
+// expect: yes
+
+// Guard on wildcard (conditional default).
+match (42) {
+  1 => print "one";
+  _ if false => print "nope";
+  _ => print "fallback";
+}
+// expect: fallback
+
+// Guard referencing bound variable from map with rename.
+var data = {"x": 10, "y": 20};
+match (data) {
+  {x: a, y: b} if a + b > 50 => print "large";
+  {x: a, y: b} if a + b <= 50 => print a + b;
+}
+// expect: 30
+
+// No guard — existing behavior unchanged.
+match ("hello") {
+  "hello" => print "hi";
+  _ => print "other";
+}
+// expect: hi
+
+// Guard with literal pattern (no binding).
+match (7) {
+  7 if 7 > 10 => print "no";
+  7 if 7 < 10 => print "yes";
+  _ => print "default";
+}
+// expect: yes
+
+// Guard fails, falls through to next arm entirely.
+match ([1, 2]) {
+  [a, b] if a > 100 => print "no";
+  [a, b] if a == 1 => print a + b;
+  _ => print "default";
+}
+// expect: 3

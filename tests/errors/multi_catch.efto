@@ -1,0 +1,75 @@
+import { TypeError, ValueError, Error } from error;
+
+// Typed catch — catches matching type.
+try {
+  throw TypeError("bad type");
+} catch (TypeError e) {
+  print e;
+}
+// expect: TypeError: bad type
+
+// Union catch — catches either type.
+try {
+  throw ValueError("bad value");
+} catch (TypeError | ValueError e) {
+  print "caught";
+}
+// expect: caught
+
+// Typed catch that doesn't match — propagates.
+try {
+  try {
+    throw ValueError("val");
+  } catch (TypeError e) {
+    print "wrong";
+  }
+} catch (e) {
+  print e;
+}
+// expect: ValueError: val
+
+// Multiple catch blocks — first matches.
+try {
+  throw TypeError("t");
+} catch (TypeError e) {
+  print "type";
+} catch (ValueError e) {
+  print "value";
+}
+// expect: type
+
+// Multiple catch blocks — second matches.
+try {
+  throw ValueError("v");
+} catch (TypeError e) {
+  print "type";
+} catch (ValueError e) {
+  print "value";
+}
+// expect: value
+
+// Untyped fallback after typed.
+try {
+  throw "plain string";
+} catch (TypeError e) {
+  print "type";
+} catch (e) {
+  print "fallback: " + e;
+}
+// expect: fallback: plain string
+
+// Existing untyped catch still works.
+try {
+  throw "oops";
+} catch (e) {
+  print e;
+}
+// expect: oops
+
+// Catch without variable still works.
+try {
+  throw "ignored";
+} catch {
+  print "caught no var";
+}
+// expect: caught no var

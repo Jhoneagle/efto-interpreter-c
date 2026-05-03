@@ -301,38 +301,78 @@ static void forEachStatement() {
   // for (var item in collection) { body }
   // Caller already consumed 'for', '(', 'var', <identifier>, 'in'.
   // parser.previous is set to the iterator variable name.
-  beginScope();
+  //
+  // Compiled as:
+  //   iter = collection.__iter__()
+  //   loopStart:
+  //     try { val = iter.__next__() }
+  //     catch -> jump exitLoop       (StopIteration or any exception from __next__)
+  //     bind val to user variable
+  //     body
+  //     loop loopStart
+  //   exitLoop:
 
+  beginScope();
   Token iteratorName = parser.previous;
 
-  // Compile the collection expression -> hidden local (slot C).
+  // Compile the collection expression.
   expression();
   consume(TOKEN_RIGHT_PAREN, "Expect ')' after for-each collection.");
 
+  // Call __iter__() on collection to get an iterator.
+  Token iterTok = syntheticToken("__iter__");
+  uint8_t iterConst = identifierConstant(&iterTok);
+  emitBytes(OP_INVOKE, iterConst);
+  emitByte(0); // 0 args
+
+  // Store iterator as hidden local.
   addLocal(syntheticToken(""));
   markInitialized();
-  int collectionSlot = current->localCount - 1;
+  int iterSlot = current->localCount - 1;
 
-  // Hidden index local initialized to 0 (slot I).
-  emitConstant(NUMBER_VAL(0));
-  addLocal(syntheticToken(""));
-  markInitialized();
-  int indexSlot = current->localCount - 1;
-
-  // Loop start: check index < collection.length
+  // Loop start.
   int loopStart = currentChunk()->count;
 
-  emitBytes(OP_GET_LOCAL, (uint8_t)indexSlot);
-  emitBytes(OP_GET_LOCAL, (uint8_t)collectionSlot);
-  uint8_t lengthConstant = makeConstant(OBJ_VAL(
-      copyString("length", 6)));
-  emitBytes(OP_GET_PROPERTY, lengthConstant);
-  emitByte(OP_LESS);
+  // --- try { val = iter.__next__() } ---
+  // Emit OP_TRY pointing to catch block.
+  int setupTryPos = currentChunk()->count;
+  emitByte(OP_TRY);
+  emitByte(0xff);
+  emitByte(0xff);
 
-  int exitJump = emitJump(OP_JUMP_IF_FALSE);
-  emitByte(OP_POP); // Pop the true.
+  // Get next value from iterator.
+  // OP_ITERATE handles built-in iterators (OBJ_ITERATOR) natively.
+  // For user-defined iterators (instances), it dispatches __next__().
+  // On exhaustion, StopIteration is thrown (caught by try/catch above).
+  emitBytes(OP_GET_LOCAL, (uint8_t)iterSlot);
+  emitByte(OP_ITERATE);
+  // Value from iterator is now on top of stack.
 
-  // Set up loop context. scopeDepth is the outer for-each scope.
+  // Normal path: __next__() succeeded. Pop catch handler.
+  emitByte(OP_END_TRY);
+
+  // Jump over catch block.
+  int skipCatch = emitJump(OP_JUMP);
+
+  // --- catch: StopIteration means end of iteration ---
+  int catchStart = currentChunk()->count;
+
+  // Patch OP_TRY to point to catch start.
+  int tryOffset = catchStart - (setupTryPos + 3);
+  currentChunk()->code[setupTryPos + 1] = (tryOffset >> 8) & 0xff;
+  currentChunk()->code[setupTryPos + 2] = tryOffset & 0xff;
+
+  // Exception is on stack. Pop it (we don't need it).
+  emitByte(OP_POP);
+
+  // Jump to exit loop.
+  int exitJump = emitJump(OP_JUMP);
+
+  // --- Normal path continues here ---
+  patchJump(skipCatch);
+  // Value from __next__() is on stack.
+
+  // Set up loop context.
   Loop loop;
   loop.enclosing = currentLoop;
   loop.scopeDepth = current->scopeDepth;
@@ -343,11 +383,6 @@ static void forEachStatement() {
 
   // Inner scope for the user's variable.
   beginScope();
-
-  // var item = collection[index]
-  emitBytes(OP_GET_LOCAL, (uint8_t)collectionSlot);
-  emitBytes(OP_GET_LOCAL, (uint8_t)indexSlot);
-  emitByte(OP_INDEX_GET);
   addLocal(iteratorName);
   markInitialized();
 
@@ -356,22 +391,15 @@ static void forEachStatement() {
 
   endScope(); // Pops user's variable.
 
-  // Patch continue jumps to here (before increment).
+  // Patch continue jumps to here (before loop back).
   for (int i = 0; i < loop.continueCount; i++) {
     patchJump(loop.continueJumps[i]);
   }
 
-  // Increment index: index = index + 1
-  emitBytes(OP_GET_LOCAL, (uint8_t)indexSlot);
-  emitConstant(NUMBER_VAL(1));
-  emitByte(OP_ADD);
-  emitBytes(OP_SET_LOCAL, (uint8_t)indexSlot);
-  emitByte(OP_POP);
-
   emitLoop(loopStart);
 
+  // Exit loop.
   patchJump(exitJump);
-  emitByte(OP_POP); // Pop the false.
 
   // Patch break jumps to here.
   for (int i = 0; i < loop.breakCount; i++) {
@@ -379,7 +407,7 @@ static void forEachStatement() {
   }
 
   currentLoop = loop.enclosing;
-  endScope(); // Pops hidden locals.
+  endScope(); // Pops iterator hidden local.
 }
 
 static void forStatement() {
@@ -749,14 +777,31 @@ static void matchStatement() {
       emitByte(OP_POP); // pop true
     }
 
+    // Guard clause: pattern if condition => body
+    bool hasGuard = match(TOKEN_IF);
+    int guardFailJump = -1;
+    int bindingCount = 0;
+
+    if (hasGuard) {
+      expression();
+      guardFailJump = emitJump(OP_JUMP_IF_FALSE);
+      emitByte(OP_POP); // pop guard true (success path)
+    }
+
     // Consume => separator.
     consume(TOKEN_ARROW, "Expect '=>' after match pattern.");
 
     // Compile arm body.
     statement();
 
-    // Close destructuring scope if we opened one.
+    // Close binding scope (success path).
     if (hasBindingScope) {
+      // Count bindings BEFORE endScope destroys localCount.
+      for (int i = current->localCount - 1; i >= 0; i--) {
+        if (current->locals[i].depth > current->scopeDepth - 1)
+          bindingCount++;
+        else break;
+      }
       endScope();
     }
 
@@ -767,16 +812,35 @@ static void matchStatement() {
       error("Too many arms in match statement.");
     }
 
+    // Guard failure handling.
+    if (hasGuard) {
+      if (hasBindingScope) {
+        // Case B: binding + guard failure.
+        // Stack: [..., bound1, ..., boundN, guard_false]
+        patchJump(guardFailJump);
+        emitByte(OP_POP); // pop guard false
+        for (int i = 0; i < bindingCount; i++) {
+          emitByte(OP_POP); // pop each bound variable
+        }
+        emitByte(OP_FALSE); // push false for shared skip-pop
+        skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
+      } else {
+        // Case A: no bindings — guard false already on stack.
+        // Add guardFailJump to skipJumps; patchJump will forward it
+        // to the shared OP_POP target.
+        skipJumps[skipCount++] = guardFailJump;
+      }
+    }
+
     // Patch all skip jumps to the same target with a single POP.
-    // Only one comparison can fail per arm, leaving one false on stack.
     if (skipCount > 0) {
       for (int i = 0; i < skipCount; i++) {
         patchJump(skipJumps[i]);
       }
-      emitByte(OP_POP); // pop the single false value
+      emitByte(OP_POP); // pop the false value
     }
 
-    if (isWild) {
+    if (isWild && !hasGuard) {
       hasWildcard = true;
     }
   }
@@ -935,7 +999,7 @@ static void tryStatement() {
   int catchStart = currentChunk()->count;
 
   bool hasCatch = false;
-  if (match(TOKEN_CATCH)) {
+  if (check(TOKEN_CATCH)) {
     hasCatch = true;
 
     // Patch OP_TRY to point to catch start.
@@ -943,19 +1007,108 @@ static void tryStatement() {
     currentChunk()->code[setupTryPos + 1] = (tryOffset >> 8) & 0xff;
     currentChunk()->code[setupTryPos + 2] = tryOffset & 0xff;
 
+    // Outer scope for the hidden exception local (shared by all catch blocks).
     beginScope();
-    if (match(TOKEN_LEFT_PAREN)) {
-      consume(TOKEN_IDENTIFIER, "Expect variable name in catch.");
-      addLocal(parser.previous);
-      markInitialized();
-      consume(TOKEN_RIGHT_PAREN, "Expect ')' after catch variable.");
-    } else {
-      emitByte(OP_POP);
+
+    // Store exception as hidden local.
+    addLocal(syntheticToken(""));
+    markInitialized();
+    int exSlot = current->localCount - 1;
+
+    int catchEndJumps[16];
+    int catchCount = 0;
+
+    while (match(TOKEN_CATCH)) {
+      if (match(TOKEN_LEFT_PAREN)) {
+        consume(TOKEN_IDENTIFIER, "Expect identifier in catch.");
+        Token first = parser.previous;
+
+        if (check(TOKEN_IDENTIFIER) || check(TOKEN_PIPE)) {
+          // Typed catch: catch (TypeName varName) or catch (T1 | T2 varName)
+          Token typeNames[16];
+          int typeCount = 0;
+          typeNames[typeCount++] = first;
+
+          while (match(TOKEN_PIPE)) {
+            consume(TOKEN_IDENTIFIER, "Expect type name after '|'.");
+            if (typeCount < 16) {
+              typeNames[typeCount++] = parser.previous;
+            } else {
+              error("Too many types in catch clause.");
+            }
+          }
+
+          consume(TOKEN_IDENTIFIER, "Expect variable name after type(s).");
+          Token varName = parser.previous;
+          consume(TOKEN_RIGHT_PAREN, "Expect ')' after catch variable.");
+
+          // Type check with short-circuit OR.
+          int matchJumps[16];
+          int matchCount = 0;
+          for (int t = 0; t < typeCount; t++) {
+            emitBytes(OP_GET_LOCAL, (uint8_t)exSlot);
+            namedVariable(typeNames[t], false);
+            emitByte(OP_CHECK_TYPE);
+            emitByte(OP_NOT);
+            matchJumps[matchCount++] = emitJump(OP_JUMP_IF_FALSE);
+            emitByte(OP_POP); // pop true (NOT of false = no match)
+          }
+          // No match: jump to next catch block.
+          int noMatchJump = emitJump(OP_JUMP);
+
+          // Match found: patch jumps, bind variable.
+          for (int t = 0; t < matchCount; t++) {
+            patchJump(matchJumps[t]);
+          }
+          emitByte(OP_POP); // pop false (NOT of true = match found)
+
+          beginScope();
+          emitBytes(OP_GET_LOCAL, (uint8_t)exSlot);
+          addLocal(varName);
+          markInitialized();
+          consume(TOKEN_LEFT_BRACE, "Expect '{' after catch.");
+          block();
+          endScope();
+
+          if (catchCount < 16) {
+            catchEndJumps[catchCount++] = emitJump(OP_JUMP);
+          }
+          patchJump(noMatchJump);
+
+        } else {
+          // Untyped catch: catch (varName)
+          consume(TOKEN_RIGHT_PAREN, "Expect ')' after catch variable.");
+          beginScope();
+          emitBytes(OP_GET_LOCAL, (uint8_t)exSlot);
+          addLocal(first);
+          markInitialized();
+          consume(TOKEN_LEFT_BRACE, "Expect '{' after catch.");
+          block();
+          endScope();
+          if (catchCount < 16) {
+            catchEndJumps[catchCount++] = emitJump(OP_JUMP);
+          }
+        }
+      } else {
+        // catch { } without parens (discard exception).
+        consume(TOKEN_LEFT_BRACE, "Expect '{' after catch.");
+        block();
+        if (catchCount < 16) {
+          catchEndJumps[catchCount++] = emitJump(OP_JUMP);
+        }
+      }
     }
 
-    consume(TOKEN_LEFT_BRACE, "Expect '{' after catch.");
-    block();
-    endScope();
+    // After all catch blocks: if none matched (all typed), re-throw.
+    emitBytes(OP_GET_LOCAL, (uint8_t)exSlot);
+    emitByte(OP_THROW);
+
+    // Patch all catch-end jumps to here.
+    for (int i = 0; i < catchCount; i++) {
+      patchJump(catchEndJumps[i]);
+    }
+
+    endScope(); // pop hidden exception local
   }
 
   patchJump(skipCatch);

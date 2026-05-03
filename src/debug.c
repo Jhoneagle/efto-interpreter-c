@@ -203,6 +203,20 @@ int disassembleInstruction(Chunk* chunk, int offset) {
       return constantInstruction("OP_INVOKE_SPREAD", chunk, offset);
     case OP_CHECK_TYPE:
       return simpleInstruction("OP_CHECK_TYPE", offset);
+    case OP_ITERATE:
+      return simpleInstruction("OP_ITERATE", offset);
+    case OP_BITWISE_AND:
+      return simpleInstruction("OP_BITWISE_AND", offset);
+    case OP_BITWISE_OR:
+      return simpleInstruction("OP_BITWISE_OR", offset);
+    case OP_BITWISE_XOR:
+      return simpleInstruction("OP_BITWISE_XOR", offset);
+    case OP_BITWISE_NOT:
+      return simpleInstruction("OP_BITWISE_NOT", offset);
+    case OP_LEFT_SHIFT:
+      return simpleInstruction("OP_LEFT_SHIFT", offset);
+    case OP_RIGHT_SHIFT:
+      return simpleInstruction("OP_RIGHT_SHIFT", offset);
     default:
       printf("Unknown opcode %d\n", instruction);
       return offset + 1;

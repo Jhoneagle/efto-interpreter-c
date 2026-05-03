@@ -1,0 +1,64 @@
+import regex;
+
+// find() returns a map with match, index, groups.
+var r = regex.compile("(\\d+)-(\\d+)");
+var m = r.find("date: 2024-01");
+print m["match"];
+// expect: 2024-01
+print m["index"];
+// expect: 6
+print m["groups"][0];
+// expect: 2024
+print m["groups"][1];
+// expect: 01
+
+// find() returns nil on no match.
+var noMatch = regex.compile("xyz").find("hello");
+print noMatch;
+// expect: nil
+
+// findAll() returns array of match maps.
+var vowels = regex.compile("[aeiou]");
+var all = vowels.findAll("hello");
+print all.length;
+// expect: 2
+print all[0]["match"];
+// expect: e
+print all[1]["match"];
+// expect: o
+
+// replace() replaces first match.
+var spaces = regex.compile("\\s+");
+print spaces.replace("hello   world", "-");
+// expect: hello-world
+
+// replace() with no match returns original.
+print regex.compile("xyz").replace("hello", "!");
+// expect: hello
+
+// split() splits at matches.
+var comma = regex.compile(",\\s*");
+var parts = comma.split("a, b, c");
+print parts[0];
+// expect: a
+print parts[1];
+// expect: b
+print parts[2];
+// expect: c
+
+// Case insensitive flag.
+var ci = regex.compile("hello", "i");
+print ci.test("HELLO");
+// expect: true
+print ci.test("Hello");
+// expect: true
+
+// Non-capturing group.
+var nc = regex.compile("(?:ab)+");
+print nc.test("abab");
+// expect: true
+var ncm = nc.find("xababx");
+print ncm["match"];
+// expect: abab
+print ncm["groups"].length;
+// expect: 0

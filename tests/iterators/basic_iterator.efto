@@ -1,0 +1,48 @@
+// For-in on array (backward compat).
+var arr = [10, 20, 30];
+for (var x in arr) {
+  print x;
+}
+// expect: 10
+// expect: 20
+// expect: 30
+
+// For-in on map (iterates keys).
+var m = {"a": 1, "b": 2};
+var keys = [];
+for (var k in m) {
+  keys.push(k);
+}
+keys.sort();
+for (var k in keys) {
+  print k;
+}
+// expect: a
+// expect: b
+
+// For-in on empty array.
+for (var x in []) {
+  print "nope";
+}
+
+// For-in with break.
+for (var x in [1, 2, 3, 4, 5]) {
+  if (x == 3) break;
+  print x;
+}
+// expect: 1
+// expect: 2
+
+// For-in with continue.
+for (var x in [1, 2, 3, 4]) {
+  if (x == 2) continue;
+  print x;
+}
+// expect: 1
+// expect: 3
+// expect: 4
+
+// Global iter() function.
+var it = iter([5, 6, 7]);
+print typeof it;
+// expect: iterator

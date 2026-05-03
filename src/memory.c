@@ -2,6 +2,7 @@
 
 #include "compiler.h"
 #include "memory.h"
+#include "regex_engine.h"
 #include "value_table.h"
 #include "vm.h"
 
@@ -96,6 +97,16 @@ static void blackenObject(Obj* object) {
       markObject((Obj*)file->mode);
       break;
     }
+    case OBJ_ITERATOR: {
+      ObjIterator* iter = (ObjIterator*)object;
+      markValue(iter->source);
+      break;
+    }
+    case OBJ_REGEX: {
+      ObjRegex* re = (ObjRegex*)object;
+      markObject((Obj*)re->pattern);
+      break;
+    }
     case OBJ_INSTANCE: {
       ObjInstance* instance = (ObjInstance*)object;
       markObject((Obj*)instance->klass);
@@ -176,6 +187,15 @@ static void freeObject(Obj* object) {
     case OBJ_BOUND_METHOD:
       FREE(ObjBoundMethod, object);
       break;
+    case OBJ_ITERATOR:
+      FREE(ObjIterator, object);
+      break;
+    case OBJ_REGEX: {
+      ObjRegex* re = (ObjRegex*)object;
+      if (re->compiled != NULL) regexFree(re->compiled);
+      FREE(ObjRegex, object);
+      break;
+    }
     case OBJ_FILE: {
       ObjFile* file = (ObjFile*)object;
       if (file->isOpen && file->file != NULL) {
@@ -291,11 +311,16 @@ static void markRoots() {
   markObject((Obj*)vm.magicToString);
   markObject((Obj*)vm.magicToNumber);
   markObject((Obj*)vm.magicToBool);
+  markObject((Obj*)vm.magicIter);
+  markObject((Obj*)vm.magicNext);
   markObject((Obj*)vm.arrayMethods);
   markObject((Obj*)vm.fileMethods);
+  markObject((Obj*)vm.iteratorMethods);
   markObject((Obj*)vm.mapMethods);
+  markObject((Obj*)vm.regexMethods);
   markObject((Obj*)vm.setMethods);
   markObject((Obj*)vm.stringMethods);
+  markObject((Obj*)vm.stopIterationClass);
   markTable(&vm.importCache);
   for (int i = 0; i < vm.searchPathCount; i++) {
     markObject((Obj*)vm.searchPaths[i]);

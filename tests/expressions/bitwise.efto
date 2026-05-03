@@ -1,0 +1,111 @@
+// Bitwise AND.
+print 12 & 10;
+// expect: 8
+
+// Bitwise OR.
+print 12 | 10;
+// expect: 14
+
+// Bitwise XOR.
+print 12 ^ 10;
+// expect: 6
+
+// Bitwise NOT.
+print ~0;
+// expect: -1
+
+print ~-1;
+// expect: 0
+
+print ~255;
+// expect: -256
+
+// Left shift.
+print 1 << 4;
+// expect: 16
+
+print 3 << 2;
+// expect: 12
+
+// Right shift (arithmetic).
+print 16 >> 2;
+// expect: 4
+
+print -16 >> 2;
+// expect: -4
+
+// Shift by 0.
+print 42 << 0;
+// expect: 42
+
+print 42 >> 0;
+// expect: 42
+
+// Combined operations.
+print (1 << 4) | (1 << 2) | 1;
+// expect: 21
+
+// XOR swap.
+var a = 5;
+var b = 9;
+a = a ^ b;
+b = a ^ b;
+a = a ^ b;
+print a;
+// expect: 9
+print b;
+// expect: 5
+
+// Compound assignment.
+var x = 15;
+x &= 6;
+print x;
+// expect: 6
+
+x = 10;
+x |= 5;
+print x;
+// expect: 15
+
+x = 15;
+x ^= 6;
+print x;
+// expect: 9
+
+x = 1;
+x <<= 3;
+print x;
+// expect: 8
+
+x = 32;
+x >>= 2;
+print x;
+// expect: 8
+
+// Precedence: bitwise AND binds tighter than bitwise OR.
+print 3 | 4 & 6;
+// expect: 7
+
+// Precedence: bitwise AND binds looser than equality.
+// 3 & 1 == 1 parses as 3 & (1 == 1) which is 3 & true -> runtime error.
+// Use parens to control precedence:
+print (3 & 1) == 1;
+// expect: true
+
+// Precedence: shift vs addition.
+// 1 + 2 << 3 parses as (1 + 2) << 3 = 24
+print 1 + 2 << 3;
+// expect: 24
+
+// Mask operations.
+print 255 & 15;
+// expect: 15
+
+// Check individual bits with explicit parens.
+var flags = 5;
+print (flags & 1) != 0;
+// expect: true
+print (flags & 2) != 0;
+// expect: false
+print (flags & 4) != 0;
+// expect: true

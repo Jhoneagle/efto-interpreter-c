@@ -59,11 +59,16 @@ typedef struct {
   ObjString* magicToString;
   ObjString* magicToNumber;
   ObjString* magicToBool;
+  ObjString* magicIter;
+  ObjString* magicNext;
   ObjClass* arrayMethods;
   ObjClass* fileMethods;
+  ObjClass* iteratorMethods;
   ObjClass* mapMethods;
+  ObjClass* regexMethods;
   ObjClass* setMethods;
   ObjClass* stringMethods;
+  ObjClass* stopIterationClass;
   ObjUpvalue* openUpvalues;
   Table importCache;
   ObjString* searchPaths[8];

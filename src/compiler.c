@@ -249,6 +249,11 @@ static void binary(bool canAssign) {
     case TOKEN_SLASH:         emitByte(OP_DIVIDE); break;
     case TOKEN_PERCENT:       emitByte(OP_MODULO); break;
     case TOKEN_IS:            emitByte(OP_CHECK_TYPE); break;
+    case TOKEN_AMPERSAND:     emitByte(OP_BITWISE_AND); break;
+    case TOKEN_PIPE:          emitByte(OP_BITWISE_OR); break;
+    case TOKEN_CARET:         emitByte(OP_BITWISE_XOR); break;
+    case TOKEN_LEFT_SHIFT:    emitByte(OP_LEFT_SHIFT); break;
+    case TOKEN_RIGHT_SHIFT:   emitByte(OP_RIGHT_SHIFT); break;
     default: return; // Unreachable.
   }
 }
@@ -473,7 +478,10 @@ static int resolveUpvalue(Compiler* compiler, Token* name) {
 bool isCompoundAssign(TokenType type) {
   return type == TOKEN_PLUS_EQUAL || type == TOKEN_MINUS_EQUAL ||
          type == TOKEN_STAR_EQUAL || type == TOKEN_SLASH_EQUAL ||
-         type == TOKEN_PERCENT_EQUAL;
+         type == TOKEN_PERCENT_EQUAL ||
+         type == TOKEN_AMPERSAND_EQUAL || type == TOKEN_PIPE_EQUAL ||
+         type == TOKEN_CARET_EQUAL || type == TOKEN_LEFT_SHIFT_EQUAL ||
+         type == TOKEN_RIGHT_SHIFT_EQUAL;
 }
 
 uint8_t compoundOp(TokenType type) {
@@ -482,7 +490,12 @@ uint8_t compoundOp(TokenType type) {
     case TOKEN_MINUS_EQUAL:   return OP_SUBTRACT;
     case TOKEN_STAR_EQUAL:    return OP_MULTIPLY;
     case TOKEN_SLASH_EQUAL:   return OP_DIVIDE;
-    case TOKEN_PERCENT_EQUAL: return OP_MODULO;
+    case TOKEN_PERCENT_EQUAL:      return OP_MODULO;
+    case TOKEN_AMPERSAND_EQUAL:    return OP_BITWISE_AND;
+    case TOKEN_PIPE_EQUAL:         return OP_BITWISE_OR;
+    case TOKEN_CARET_EQUAL:        return OP_BITWISE_XOR;
+    case TOKEN_LEFT_SHIFT_EQUAL:   return OP_LEFT_SHIFT;
+    case TOKEN_RIGHT_SHIFT_EQUAL:  return OP_RIGHT_SHIFT;
     default: return 0;
   }
 }
@@ -547,6 +560,7 @@ static void unary(bool canAssign) {
   switch (operatorType) {
     case TOKEN_BANG: emitByte(OP_NOT); break;
     case TOKEN_MINUS: emitByte(OP_NEGATE); break;
+    case TOKEN_TILDE: emitByte(OP_BITWISE_NOT); break;
     default: return; // Unreachable.
   }
 }
@@ -795,6 +809,17 @@ ParseRule rules[] = {
   [TOKEN_STAR_EQUAL]    = {NULL,     NULL,   PREC_NONE},
   [TOKEN_SLASH_EQUAL]   = {NULL,     NULL,   PREC_NONE},
   [TOKEN_PERCENT_EQUAL] = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_AMPERSAND]        = {NULL,  binary, PREC_BITWISE_AND},
+  [TOKEN_AMPERSAND_EQUAL]  = {NULL,  NULL,   PREC_NONE},
+  [TOKEN_PIPE]             = {NULL,  binary, PREC_BITWISE_OR},
+  [TOKEN_PIPE_EQUAL]       = {NULL,  NULL,   PREC_NONE},
+  [TOKEN_CARET]            = {NULL,  binary, PREC_BITWISE_XOR},
+  [TOKEN_CARET_EQUAL]      = {NULL,  NULL,   PREC_NONE},
+  [TOKEN_TILDE]            = {unary, NULL,   PREC_NONE},
+  [TOKEN_LEFT_SHIFT]       = {NULL,  binary, PREC_SHIFT},
+  [TOKEN_LEFT_SHIFT_EQUAL] = {NULL,  NULL,   PREC_NONE},
+  [TOKEN_RIGHT_SHIFT]      = {NULL,  binary, PREC_SHIFT},
+  [TOKEN_RIGHT_SHIFT_EQUAL]= {NULL,  NULL,   PREC_NONE},
   [TOKEN_ARROW]         = {NULL,     NULL,   PREC_NONE},
   [TOKEN_IDENTIFIER]    = {variable,     NULL,   PREC_NONE},
   [TOKEN_STRING]        = {string,     NULL,   PREC_NONE},
@@ -861,7 +886,10 @@ void parsePrecedence(Precedence precedence) {
   if (canAssign && (match(TOKEN_EQUAL) ||
       match(TOKEN_PLUS_EQUAL) || match(TOKEN_MINUS_EQUAL) ||
       match(TOKEN_STAR_EQUAL) || match(TOKEN_SLASH_EQUAL) ||
-      match(TOKEN_PERCENT_EQUAL))) {
+      match(TOKEN_PERCENT_EQUAL) ||
+      match(TOKEN_AMPERSAND_EQUAL) || match(TOKEN_PIPE_EQUAL) ||
+      match(TOKEN_CARET_EQUAL) || match(TOKEN_LEFT_SHIFT_EQUAL) ||
+      match(TOKEN_RIGHT_SHIFT_EQUAL))) {
     error("Invalid assignment target.");
   }
 }

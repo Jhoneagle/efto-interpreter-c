@@ -314,6 +314,10 @@ void initVM() {
     vm.magicToNumber = copyString("__toNumber__", 12);
     vm.magicToBool = NULL;
     vm.magicToBool = copyString("__toBool__", 10);
+    vm.magicIter = NULL;
+    vm.magicIter = copyString("__iter__", 8);
+    vm.magicNext = NULL;
+    vm.magicNext = copyString("__next__", 8);
 
     registerBuiltins();
 }
@@ -336,6 +340,11 @@ void freeVM() {
   vm.magicToString = NULL;
   vm.magicToNumber = NULL;
   vm.magicToBool = NULL;
+  vm.magicIter = NULL;
+  vm.magicNext = NULL;
+  vm.iteratorMethods = NULL;
+  vm.regexMethods = NULL;
+  vm.stopIterationClass = NULL;
   freeObjects();
 }
 
@@ -618,6 +627,14 @@ static bool invoke(ObjString* name, int argCount) {
 
   if (IS_FILE(receiver)) {
     return invokeFromClass(vm.fileMethods, name, argCount);
+  }
+
+  if (IS_ITERATOR(receiver)) {
+    return invokeFromClass(vm.iteratorMethods, name, argCount);
+  }
+
+  if (IS_REGEX(receiver)) {
+    return invokeFromClass(vm.regexMethods, name, argCount);
   }
 
   if (!IS_INSTANCE(receiver)) {
@@ -1302,6 +1319,65 @@ static InterpretResult run(int baseFrame) {
         }
         break;
       }
+      case OP_BITWISE_AND: {
+        if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) {
+          runtimeError("Operands must be numbers.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        int32_t b = (int32_t)AS_NUMBER(pop());
+        int32_t a = (int32_t)AS_NUMBER(pop());
+        push(NUMBER_VAL((double)(a & b)));
+        break;
+      }
+      case OP_BITWISE_OR: {
+        if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) {
+          runtimeError("Operands must be numbers.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        int32_t b = (int32_t)AS_NUMBER(pop());
+        int32_t a = (int32_t)AS_NUMBER(pop());
+        push(NUMBER_VAL((double)(a | b)));
+        break;
+      }
+      case OP_BITWISE_XOR: {
+        if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) {
+          runtimeError("Operands must be numbers.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        int32_t b = (int32_t)AS_NUMBER(pop());
+        int32_t a = (int32_t)AS_NUMBER(pop());
+        push(NUMBER_VAL((double)(a ^ b)));
+        break;
+      }
+      case OP_BITWISE_NOT: {
+        if (!IS_NUMBER(peek(0))) {
+          runtimeError("Operand must be a number.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        int32_t a = (int32_t)AS_NUMBER(pop());
+        push(NUMBER_VAL((double)(~a)));
+        break;
+      }
+      case OP_LEFT_SHIFT: {
+        if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) {
+          runtimeError("Operands must be numbers.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        int32_t b = (int32_t)AS_NUMBER(pop()) & 31;
+        int32_t a = (int32_t)AS_NUMBER(pop());
+        push(NUMBER_VAL((double)(a << b)));
+        break;
+      }
+      case OP_RIGHT_SHIFT: {
+        if (!IS_NUMBER(peek(0)) || !IS_NUMBER(peek(1))) {
+          runtimeError("Operands must be numbers.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
+        int32_t b = (int32_t)AS_NUMBER(pop()) & 31;
+        int32_t a = (int32_t)AS_NUMBER(pop());
+        push(NUMBER_VAL((double)(a >> b)));
+        break;
+      }
       case OP_TYPEOF: {
         Value value = pop();
         push(OBJ_VAL(typeOfValue(value)));
@@ -1410,6 +1486,80 @@ static InterpretResult run(int baseFrame) {
           return INTERPRET_RUNTIME_ERROR;
         }
         push(BOOL_VAL(match));
+        break;
+      }
+      case OP_ITERATE: {
+        // Fast-path for built-in iterators. Pushes next value on success.
+        // Throws StopIteration when exhausted (caught by compiler-emitted
+        // try/catch in forEachStatement).
+        Value iterVal = peek(0);
+
+        if (IS_INSTANCE(iterVal)) {
+          // User-defined iterator: dispatch __next__() via invoke.
+          // The method call executes normally in the dispatch loop.
+          // If __next__() throws StopIteration, the compiler-emitted
+          // try/catch in forEachStatement() catches it.
+          if (!invoke(vm.magicNext, 0)) {
+            return INTERPRET_RUNTIME_ERROR;
+          }
+          frame = &vm.frames[vm.frameCount - 1];
+          break;
+        }
+
+        if (!IS_ITERATOR(iterVal)) {
+          runtimeError("Value is not iterable.");
+          return INTERPRET_RUNTIME_ERROR;
+        }
+
+        ObjIterator* iter = AS_ITERATOR(iterVal);
+        Value nextVal;
+        bool hasNext = false;
+
+        if (IS_ARRAY(iter->source)) {
+          ObjArray* arr = AS_ARRAY(iter->source);
+          if (iter->index < arr->elements.count) {
+            nextVal = arr->elements.values[iter->index++];
+            hasNext = true;
+          }
+        } else if (IS_MAP(iter->source)) {
+          ObjMap* map = AS_MAP(iter->source);
+          while (iter->index < map->entries.capacity) {
+            ValueEntry* entry = &map->entries.entries[iter->index++];
+            if (entry->occupied) {
+              nextVal = entry->key;
+              hasNext = true;
+              break;
+            }
+          }
+        } else if (IS_SET(iter->source)) {
+          ObjSet* set = AS_SET(iter->source);
+          while (iter->index < set->entries.capacity) {
+            ValueEntry* entry = &set->entries.entries[iter->index++];
+            if (entry->occupied) {
+              nextVal = entry->key;
+              hasNext = true;
+              break;
+            }
+          }
+        }
+
+        if (hasNext) {
+          pop(); // pop iterator
+          push(nextVal);
+        } else {
+          // Exhausted: throw StopIteration.
+          pop(); // pop iterator
+          ObjInstance* stopInst = newInstance(vm.stopIterationClass);
+          push(OBJ_VAL(stopInst));
+          tableSet(&stopInst->fields,
+                   copyString("message", 7),
+                   OBJ_VAL(copyString("iterator exhausted", 18)));
+          Value exc = pop();
+          if (!throwException(exc)) {
+            return INTERPRET_RUNTIME_ERROR;
+          }
+          frame = &vm.frames[vm.frameCount - 1];
+        }
         break;
       }
       case OP_SUPER_INVOKE: {

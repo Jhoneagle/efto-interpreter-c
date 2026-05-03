@@ -26,12 +26,16 @@ typedef enum {
   PREC_TERNARY,     // ?:
   PREC_OR,          // or
   PREC_AND,         // and
+  PREC_BITWISE_OR,  // |
+  PREC_BITWISE_XOR, // ^
+  PREC_BITWISE_AND, // &
   PREC_EQUALITY,    // == !=
-  PREC_COMPARISON,  // < > <= >=
+  PREC_COMPARISON,  // < > <= >= is
+  PREC_SHIFT,       // << >>
   PREC_TERM,        // + -
-  PREC_FACTOR,      // * /
-  PREC_UNARY,       // ! -
-  PREC_CALL,        // . ()
+  PREC_FACTOR,      // * / %
+  PREC_UNARY,       // ! - ~ typeof
+  PREC_CALL,        // . () []
   PREC_PRIMARY
 } Precedence;
 

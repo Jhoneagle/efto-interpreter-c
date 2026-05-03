@@ -1,0 +1,49 @@
+import { StopIteration } from error;
+
+// User-defined iterator with __iter__ and __next__.
+// Protocol: __next__() returns the next value.
+// Throw StopIteration when exhausted (Python-style).
+
+class Range {
+  init(start, end) {
+    this.start = start;
+    this.end = end;
+  }
+  __iter__() {
+    return RangeIter(this.start, this.end);
+  }
+}
+
+class RangeIter {
+  init(current, end) {
+    this.current = current;
+    this.end = end;
+  }
+  __iter__() {
+    return this;
+  }
+  __next__() {
+    if (this.current >= this.end) throw StopIteration("done");
+    var val = this.current;
+    this.current = this.current + 1;
+    return val;
+  }
+}
+
+// For-in on user-defined iterable.
+for (var i in Range(0, 5)) {
+  print i;
+}
+// expect: 0
+// expect: 1
+// expect: 2
+// expect: 3
+// expect: 4
+
+// Another range.
+for (var i in Range(3, 6)) {
+  print i;
+}
+// expect: 3
+// expect: 4
+// expect: 5

@@ -33,6 +33,21 @@ ObjArray* newArray() {
   return array;
 }
 
+ObjIterator* newIterator(Value source) {
+  ObjIterator* iter = ALLOCATE_OBJ(ObjIterator, OBJ_ITERATOR);
+  iter->source = source;
+  iter->index = 0;
+  return iter;
+}
+
+ObjRegex* newRegex(ObjString* pattern, int flags, void* compiled) {
+  ObjRegex* regex = ALLOCATE_OBJ(ObjRegex, OBJ_REGEX);
+  regex->pattern = pattern;
+  regex->flags = flags;
+  regex->compiled = compiled;
+  return regex;
+}
+
 ObjFile* newFile(FILE* file, ObjString* path, ObjString* mode) {
   ObjFile* objFile = ALLOCATE_OBJ(ObjFile, OBJ_FILE);
   objFile->file = file;
@@ -231,6 +246,12 @@ void printObject(Value value) {
       break;
     case OBJ_FILE:
       printf("<file \"%s\">", AS_FILE(value)->path->chars);
+      break;
+    case OBJ_ITERATOR:
+      printf("<iterator>");
+      break;
+    case OBJ_REGEX:
+      printf("Regex(%s)", ((ObjRegex*)AS_OBJ(value))->pattern->chars);
       break;
     case OBJ_CLASS:
       printf("%s", AS_CLASS(value)->name->chars);
