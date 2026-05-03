@@ -1,0 +1,18 @@
+// OS module basics.
+import os;
+
+// platform returns a valid platform string.
+var p = os.platform();
+print p == "windows" or p == "linux" or p == "macos"; // expect: true
+
+// env returns nil for nonexistent variable.
+print os.env("EFTO_TEST_NONEXISTENT_VAR_12345"); // expect: nil
+
+// setEnv and env round-trip.
+os.setEnv("EFTO_TEST_VAR", "hello");
+print os.env("EFTO_TEST_VAR"); // expect: hello
+
+// args returns an array.
+var a = os.args();
+print type(a); // expect: array
+print a.length > 0; // expect: true

@@ -12,6 +12,7 @@
 #define OBJ_TYPE(value)        (AS_OBJ(value)->type)
 
 #define IS_ARRAY(value)        isObjType(value, OBJ_ARRAY)
+#define IS_SET(value)          isObjType(value, OBJ_SET)
 #define IS_TYPE_DESCRIPTOR(value) isObjType(value, OBJ_TYPE_DESCRIPTOR)
 #define IS_FILE(value)         isObjType(value, OBJ_FILE)
 #define IS_MAP(value)          isObjType(value, OBJ_MAP)
@@ -26,6 +27,7 @@
 #define IS_STRING(value)       isObjType(value, OBJ_STRING)
 
 #define AS_ARRAY(value)        ((ObjArray*)AS_OBJ(value))
+#define AS_SET(value)          ((ObjSet*)AS_OBJ(value))
 #define AS_TYPE_DESCRIPTOR(value) ((ObjTypeDescriptor*)AS_OBJ(value))
 #define AS_FILE(value)         ((ObjFile*)AS_OBJ(value))
 #define AS_MAP(value)          ((ObjMap*)AS_OBJ(value))
@@ -53,6 +55,7 @@ typedef enum {
   OBJ_MAP,
   OBJ_NATIVE,
   OBJ_NATIVE_METHOD,
+  OBJ_SET,
   OBJ_TYPE_DESCRIPTOR,
   OBJ_UPVALUE,
   OBJ_STRING,
@@ -67,6 +70,7 @@ typedef enum {
   TYPETAG_ARRAY,
   TYPETAG_MAP,
   TYPETAG_FUNCTION,
+  TYPETAG_SET,
   TYPETAG_CLASS_REF,
   TYPETAG_CUSTOM,
 } TypeTag;
@@ -91,6 +95,12 @@ typedef struct {
   ObjTypeDescriptor* keyType;
   ObjTypeDescriptor* valueType;
 } ObjMap;
+
+typedef struct {
+  Obj obj;
+  ValueTable entries;
+  ObjTypeDescriptor* elementType;
+} ObjSet;
 
 typedef struct {
   Obj obj;
@@ -185,6 +195,7 @@ struct ObjTypeDescriptor {
 };
 
 ObjArray* newArray();
+ObjSet* newSet();
 ObjFile* newFile(FILE* file, ObjString* path, ObjString* mode);
 ObjMap* newMap();
 ObjModule* newModule(ObjString* name, ObjString* path);

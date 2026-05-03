@@ -1,0 +1,34 @@
+// Extended time module functions.
+import time;
+
+// timestamp returns a positive number.
+var ts = time.timestamp();
+print ts > 0; // expect: true
+
+// dateParts returns a map with expected keys.
+var parts = time.dateParts(ts);
+print parts.containsKey("year"); // expect: true
+print parts.containsKey("month"); // expect: true
+print parts.containsKey("day"); // expect: true
+print parts.containsKey("hour"); // expect: true
+print parts.containsKey("minute"); // expect: true
+print parts.containsKey("second"); // expect: true
+print parts.containsKey("weekday"); // expect: true
+
+// Year should be reasonable.
+print parts["year"] >= 2024; // expect: true
+print parts["month"] >= 1; // expect: true
+print parts["month"] <= 12; // expect: true
+print parts["day"] >= 1; // expect: true
+print parts["day"] <= 31; // expect: true
+
+// dateParts with a known timestamp (2024-01-01 00:00:00 UTC = 1704067200).
+// Note: result depends on local timezone, so we just check structure.
+var known = time.dateParts(1704067200);
+print known["year"] >= 2023; // expect: true
+print known["year"] <= 2024; // expect: true
+
+// formatDate with a known timestamp.
+var formatted = time.formatDate(1704067200, "%Y");
+// Year should be 2023 or 2024 depending on timezone.
+print formatted.length == 4; // expect: true

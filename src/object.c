@@ -42,6 +42,13 @@ ObjFile* newFile(FILE* file, ObjString* path, ObjString* mode) {
   return objFile;
 }
 
+ObjSet* newSet() {
+  ObjSet* set = ALLOCATE_OBJ(ObjSet, OBJ_SET);
+  initValueTable(&set->entries);
+  set->elementType = NULL;
+  return set;
+}
+
 ObjMap* newMap() {
   ObjMap* map = ALLOCATE_OBJ(ObjMap, OBJ_MAP);
   initValueTable(&map->entries);
@@ -258,6 +265,20 @@ void printObject(Value value) {
       printf("}");
       break;
     }
+    case OBJ_SET: {
+      ObjSet* set = AS_SET(value);
+      printf("Set{");
+      bool first = true;
+      for (int i = 0; i < set->entries.capacity; i++) {
+        ValueEntry* entry = &set->entries.entries[i];
+        if (!entry->occupied) continue;
+        if (!first) printf(", ");
+        printValue(entry->key);
+        first = false;
+      }
+      printf("}");
+      break;
+    }
     case OBJ_NATIVE:
       printf("<native fn>");
       break;
@@ -285,6 +306,7 @@ bool valueMatchesTypeDescriptor(Value value, ObjTypeDescriptor* desc) {
     case TYPETAG_NIL:      return IS_NIL(value);
     case TYPETAG_ARRAY:    return IS_ARRAY(value);
     case TYPETAG_MAP:      return IS_MAP(value);
+    case TYPETAG_SET:      return IS_SET(value);
     case TYPETAG_FUNCTION:
       return IS_CLOSURE(value) || IS_NATIVE(value)
              || IS_BOUND_METHOD(value);

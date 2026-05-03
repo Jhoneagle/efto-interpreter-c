@@ -121,15 +121,59 @@ ObjString* stringify(Value value) {
         chars[totalLen] = '\0';
         return takeString(chars, totalLen);
       }
+      case OBJ_SET: {
+        ObjSet* set = AS_SET(value);
+        // Build "Set{elem1, elem2, ...}" string.
+        push(value); // GC protect
+        // First pass: stringify elements and compute length.
+        int count = 0;
+        int totalLen = 4; // "Set{" + "}"
+        ObjString** parts = NULL;
+        if (set->entries.liveCount > 0) {
+          parts = (ObjString**)malloc(sizeof(ObjString*) *
+                                      set->entries.liveCount);
+          for (int i = 0; i < set->entries.capacity; i++) {
+            ValueEntry* entry = &set->entries.entries[i];
+            if (!entry->occupied) continue;
+            parts[count] = stringify(entry->key);
+            push(OBJ_VAL(parts[count])); // GC protect
+            totalLen += parts[count]->length;
+            if (count > 0) totalLen += 2; // ", "
+            count++;
+          }
+        }
+        char* chars = ALLOCATE(char, totalLen + 1);
+        memcpy(chars, "Set{", 4);
+        int pos = 4;
+        for (int i = 0; i < count; i++) {
+          if (i > 0) { chars[pos++] = ','; chars[pos++] = ' '; }
+          memcpy(chars + pos, parts[i]->chars, parts[i]->length);
+          pos += parts[i]->length;
+        }
+        chars[pos++] = '}';
+        chars[pos] = '\0';
+        // Pop GC protections: count parts + value.
+        for (int i = 0; i < count + 1; i++) pop();
+        if (parts) free(parts);
+        return takeString(chars, totalLen);
+      }
       case OBJ_INSTANCE: {
         Value toStrMethod;
         if (tableGet(&AS_INSTANCE(value)->klass->methods,
-                     vm.magicToString, &toStrMethod) &&
-            IS_CLOSURE(toStrMethod) &&
-            AS_CLOSURE(toStrMethod)->function->arity == 0) {
-          Value strResult;
-          if (callMagicUnary(value, vm.magicToString, &strResult)) {
-            if (IS_STRING(strResult)) return AS_STRING(strResult);
+                     vm.magicToString, &toStrMethod)) {
+          if (IS_CLOSURE(toStrMethod) &&
+              AS_CLOSURE(toStrMethod)->function->arity == 0) {
+            Value strResult;
+            if (callMagicUnary(value, vm.magicToString, &strResult)) {
+              if (IS_STRING(strResult)) return AS_STRING(strResult);
+            }
+          } else if (IS_NATIVE_METHOD(toStrMethod)) {
+            Value strResult;
+            if (AS_NATIVE_METHOD(toStrMethod)->function(
+                    value, 0, NULL, &strResult) &&
+                IS_STRING(strResult)) {
+              return AS_STRING(strResult);
+            }
           }
         }
         ObjString* name = AS_INSTANCE(value)->klass->name;
@@ -231,6 +275,9 @@ void initVM() {
     vm.grayCount = 0;
     vm.grayCapacity = 0;
     vm.grayStack = NULL;
+
+    vm.argc = 0;
+    vm.argv = NULL;
 
     initTable(&vm.globals);
     initTable(&vm.strings);
@@ -390,6 +437,23 @@ bool callValue(Value callee, int argCount) {
         Value initializer;
         if (tableGet(&klass->methods, vm.initString,
                      &initializer)) {
+          if (IS_NATIVE_METHOD(initializer)) {
+            ObjNativeMethod* native = AS_NATIVE_METHOD(initializer);
+            if (argCount < native->minArity ||
+                argCount > native->arity) {
+              runtimeError("Expected %d arguments but got %d.",
+                           native->arity, argCount);
+              return false;
+            }
+            Value result;
+            Value receiver = vm.stackTop[-argCount - 1];
+            if (!native->function(receiver, argCount,
+                                  vm.stackTop - argCount, &result)) {
+              return false;
+            }
+            vm.stackTop -= argCount; // pop args, leave instance
+            return true;
+          }
           return call(AS_CLOSURE(initializer), argCount);
         } else if (argCount != 0) {
           runtimeError("Expected 0 arguments but got %d.",
@@ -548,6 +612,10 @@ static bool invoke(ObjString* name, int argCount) {
     return invokeFromClass(vm.mapMethods, name, argCount);
   }
 
+  if (IS_SET(receiver)) {
+    return invokeFromClass(vm.setMethods, name, argCount);
+  }
+
   if (IS_FILE(receiver)) {
     return invokeFromClass(vm.fileMethods, name, argCount);
   }
@@ -693,6 +761,19 @@ static bool executeGetProperty(ObjString* name) {
     }
 
     runtimeError("Map has no property '%s'.", name->chars);
+    return false;
+  }
+
+  if (IS_SET(peek(0))) {
+    ObjSet* set = AS_SET(peek(0));
+
+    if (name == vm.sizeString) {
+      pop();
+      push(NUMBER_VAL(set->entries.liveCount));
+      return true;
+    }
+
+    runtimeError("Set has no property '%s'.", name->chars);
     return false;
   }
 

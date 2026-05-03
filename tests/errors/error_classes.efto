@@ -1,0 +1,52 @@
+// Error module: error classes, is checks, toString, isError.
+import error;
+
+// Create and throw a TypeError.
+try {
+  throw error.TypeError("expected a number");
+} catch (e) {
+  print e; // expect: TypeError: expected a number
+  print e.message; // expect: expected a number
+  print e is error.TypeError; // expect: true
+  print e is error.Error; // expect: true
+  print error.isError(e); // expect: true
+}
+
+// Create a ValueError.
+try {
+  throw error.ValueError("invalid value");
+} catch (e) {
+  print e; // expect: ValueError: invalid value
+  print e is error.ValueError; // expect: true
+  print e is error.TypeError; // expect: false
+}
+
+// Create a RangeError.
+try {
+  throw error.RangeError("index out of bounds");
+} catch (e) {
+  print e; // expect: RangeError: index out of bounds
+  print e is error.RangeError; // expect: true
+}
+
+// Create an IOError.
+try {
+  throw error.IOError("file not found");
+} catch (e) {
+  print e; // expect: IOError: file not found
+  print e is error.IOError; // expect: true
+}
+
+// isError returns false for non-error values.
+print error.isError("hello"); // expect: false
+print error.isError(42); // expect: false
+print error.isError(nil); // expect: false
+
+// Base Error class.
+try {
+  throw error.Error("generic error");
+} catch (e) {
+  print e; // expect: Error: generic error
+  print e is error.Error; // expect: true
+  print error.isError(e); // expect: true
+}

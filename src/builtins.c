@@ -6,6 +6,12 @@
 #include <string.h>
 #include <time.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 #include "builtins.h"
 #include "common.h"
 #include "memory.h"
@@ -202,6 +208,7 @@ static bool arraySort(Value receiver, int argCount, Value* args,
           switch (OBJ_TYPE(v)) {
             case OBJ_ARRAY: typeName = "array"; break;
             case OBJ_MAP: typeName = "map"; break;
+            case OBJ_SET: typeName = "set"; break;
             case OBJ_CLASS: typeName = "class"; break;
             case OBJ_INSTANCE: typeName = "instance"; break;
             case OBJ_FUNCTION: case OBJ_CLOSURE:
@@ -910,6 +917,94 @@ static bool stringCharAt(Value receiver, int argCount, Value* args,
   return true;
 }
 
+static bool stringPadStart(Value receiver, int argCount, Value* args,
+                           Value* result) {
+  ObjString* str = AS_STRING(receiver);
+  if (!IS_NUMBER(args[0])) {
+    runtimeError("padStart() first argument must be a number.");
+    return false;
+  }
+  int targetLen = (int)AS_NUMBER(args[0]);
+  const char* pad = " ";
+  int padLen = 1;
+  if (argCount == 2) {
+    if (!IS_STRING(args[1])) {
+      runtimeError("padStart() second argument must be a string.");
+      return false;
+    }
+    pad = AS_STRING(args[1])->chars;
+    padLen = AS_STRING(args[1])->length;
+  }
+  if (targetLen <= str->length || padLen == 0) {
+    *result = receiver;
+    return true;
+  }
+  int fillLen = targetLen - str->length;
+  char* buffer = ALLOCATE(char, targetLen + 1);
+  for (int i = 0; i < fillLen; i++) {
+    buffer[i] = pad[i % padLen];
+  }
+  memcpy(buffer + fillLen, str->chars, str->length);
+  buffer[targetLen] = '\0';
+  *result = OBJ_VAL(takeString(buffer, targetLen));
+  return true;
+}
+
+static bool stringPadEnd(Value receiver, int argCount, Value* args,
+                         Value* result) {
+  ObjString* str = AS_STRING(receiver);
+  if (!IS_NUMBER(args[0])) {
+    runtimeError("padEnd() first argument must be a number.");
+    return false;
+  }
+  int targetLen = (int)AS_NUMBER(args[0]);
+  const char* pad = " ";
+  int padLen = 1;
+  if (argCount == 2) {
+    if (!IS_STRING(args[1])) {
+      runtimeError("padEnd() second argument must be a string.");
+      return false;
+    }
+    pad = AS_STRING(args[1])->chars;
+    padLen = AS_STRING(args[1])->length;
+  }
+  if (targetLen <= str->length || padLen == 0) {
+    *result = receiver;
+    return true;
+  }
+  int fillLen = targetLen - str->length;
+  char* buffer = ALLOCATE(char, targetLen + 1);
+  memcpy(buffer, str->chars, str->length);
+  for (int i = 0; i < fillLen; i++) {
+    buffer[str->length + i] = pad[i % padLen];
+  }
+  buffer[targetLen] = '\0';
+  *result = OBJ_VAL(takeString(buffer, targetLen));
+  return true;
+}
+
+static bool stringTrimStart(Value receiver, int argCount, Value* args,
+                            Value* result) {
+  ObjString* str = AS_STRING(receiver);
+  const char* start = str->chars;
+  const char* end = str->chars + str->length;
+  while (start < end && (*start == ' ' || *start == '\t' ||
+                          *start == '\r' || *start == '\n')) start++;
+  *result = OBJ_VAL(copyString(start, (int)(end - start)));
+  return true;
+}
+
+static bool stringTrimEnd(Value receiver, int argCount, Value* args,
+                          Value* result) {
+  ObjString* str = AS_STRING(receiver);
+  const char* start = str->chars;
+  const char* end = str->chars + str->length;
+  while (end > start && (end[-1] == ' ' || end[-1] == '\t' ||
+                          end[-1] == '\r' || end[-1] == '\n')) end--;
+  *result = OBJ_VAL(copyString(start, (int)(end - start)));
+  return true;
+}
+
 // --- Higher-order array methods ---
 
 static bool arrayMap(Value receiver, int argCount, Value* args,
@@ -1207,6 +1302,7 @@ ObjString* typeOfValue(Value value) {
       case OBJ_STRING:        return copyString("string", 6);
       case OBJ_ARRAY:         return copyString("array", 5);
       case OBJ_MAP:           return copyString("map", 3);
+      case OBJ_SET:           return copyString("set", 3);
       case OBJ_CLASS:         return copyString("class", 5);
       case OBJ_FILE:          return copyString("file", 4);
       case OBJ_INSTANCE:      return copyString("instance", 8);
@@ -1357,6 +1453,715 @@ static Value parseNumberNative(int argCount, Value* args) {
   double result = strtod(AS_STRING(args[0])->chars, &end);
   if (end == AS_STRING(args[0])->chars || *end != '\0') return NIL_VAL;
   return NUMBER_VAL(result);
+}
+
+// --- Math extension functions ---
+
+static Value sinNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("sin() expects a number argument.");
+    return NIL_VAL;
+  }
+  return NUMBER_VAL(sin(AS_NUMBER(args[0])));
+}
+
+static Value cosNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("cos() expects a number argument.");
+    return NIL_VAL;
+  }
+  return NUMBER_VAL(cos(AS_NUMBER(args[0])));
+}
+
+static Value tanNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("tan() expects a number argument.");
+    return NIL_VAL;
+  }
+  return NUMBER_VAL(tan(AS_NUMBER(args[0])));
+}
+
+static Value asinNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("asin() expects a number argument.");
+    return NIL_VAL;
+  }
+  return NUMBER_VAL(asin(AS_NUMBER(args[0])));
+}
+
+static Value acosNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("acos() expects a number argument.");
+    return NIL_VAL;
+  }
+  return NUMBER_VAL(acos(AS_NUMBER(args[0])));
+}
+
+static Value atanNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("atan() expects a number argument.");
+    return NIL_VAL;
+  }
+  return NUMBER_VAL(atan(AS_NUMBER(args[0])));
+}
+
+static Value atan2Native(int argCount, Value* args) {
+  if (argCount != 2 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+    runtimeError("atan2() expects two number arguments.");
+    return NIL_VAL;
+  }
+  return NUMBER_VAL(atan2(AS_NUMBER(args[0]), AS_NUMBER(args[1])));
+}
+
+static Value logNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("log() expects a number argument.");
+    return NIL_VAL;
+  }
+  return NUMBER_VAL(log(AS_NUMBER(args[0])));
+}
+
+static Value log10Native(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("log10() expects a number argument.");
+    return NIL_VAL;
+  }
+  return NUMBER_VAL(log10(AS_NUMBER(args[0])));
+}
+
+static Value log2Native(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("log2() expects a number argument.");
+    return NIL_VAL;
+  }
+  return NUMBER_VAL(log2(AS_NUMBER(args[0])));
+}
+
+static Value expNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("exp() expects a number argument.");
+    return NIL_VAL;
+  }
+  return NUMBER_VAL(exp(AS_NUMBER(args[0])));
+}
+
+static Value clampNative(int argCount, Value* args) {
+  if (argCount != 3 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1]) ||
+      !IS_NUMBER(args[2])) {
+    runtimeError("clamp() expects three number arguments.");
+    return NIL_VAL;
+  }
+  double val = AS_NUMBER(args[0]);
+  double lo = AS_NUMBER(args[1]);
+  double hi = AS_NUMBER(args[2]);
+  if (val < lo) return NUMBER_VAL(lo);
+  if (val > hi) return NUMBER_VAL(hi);
+  return NUMBER_VAL(val);
+}
+
+static Value lerpNative(int argCount, Value* args) {
+  if (argCount != 3 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1]) ||
+      !IS_NUMBER(args[2])) {
+    runtimeError("lerp() expects three number arguments.");
+    return NIL_VAL;
+  }
+  double a = AS_NUMBER(args[0]);
+  double b = AS_NUMBER(args[1]);
+  double t = AS_NUMBER(args[2]);
+  return NUMBER_VAL(a + (b - a) * t);
+}
+
+static Value signNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("sign() expects a number argument.");
+    return NIL_VAL;
+  }
+  double x = AS_NUMBER(args[0]);
+  if (x > 0) return NUMBER_VAL(1);
+  if (x < 0) return NUMBER_VAL(-1);
+  return NUMBER_VAL(0);
+}
+
+// --- Time extension functions ---
+
+static Value timestampNative(int argCount, Value* args) {
+  return NUMBER_VAL((double)time(NULL));
+}
+
+static Value sleepNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("sleep() expects a number argument (seconds).");
+    return NIL_VAL;
+  }
+  double seconds = AS_NUMBER(args[0]);
+  if (seconds < 0) {
+    runtimeError("sleep() argument must be non-negative.");
+    return NIL_VAL;
+  }
+#ifdef _WIN32
+  Sleep((DWORD)(seconds * 1000));
+#else
+  struct timespec ts;
+  ts.tv_sec = (time_t)seconds;
+  ts.tv_nsec = (long)((seconds - (double)ts.tv_sec) * 1e9);
+  nanosleep(&ts, NULL);
+#endif
+  return NIL_VAL;
+}
+
+static Value datePartsNative(int argCount, Value* args) {
+  time_t t;
+  if (argCount == 0) {
+    t = time(NULL);
+  } else if (argCount == 1 && IS_NUMBER(args[0])) {
+    t = (time_t)AS_NUMBER(args[0]);
+  } else {
+    runtimeError("dateParts() expects 0 or 1 number argument.");
+    return NIL_VAL;
+  }
+
+  struct tm* tm = localtime(&t);
+  if (tm == NULL) {
+    runtimeError("dateParts() failed to convert timestamp.");
+    return NIL_VAL;
+  }
+
+  ObjMap* map = newMap();
+  push(OBJ_VAL(map)); // GC protect
+
+  ObjString* k;
+  k = copyString("year", 4);
+  push(OBJ_VAL(k));
+  valueTableSet(&map->entries, OBJ_VAL(k), NUMBER_VAL(tm->tm_year + 1900));
+  pop();
+
+  k = copyString("month", 5);
+  push(OBJ_VAL(k));
+  valueTableSet(&map->entries, OBJ_VAL(k), NUMBER_VAL(tm->tm_mon + 1));
+  pop();
+
+  k = copyString("day", 3);
+  push(OBJ_VAL(k));
+  valueTableSet(&map->entries, OBJ_VAL(k), NUMBER_VAL(tm->tm_mday));
+  pop();
+
+  k = copyString("hour", 4);
+  push(OBJ_VAL(k));
+  valueTableSet(&map->entries, OBJ_VAL(k), NUMBER_VAL(tm->tm_hour));
+  pop();
+
+  k = copyString("minute", 6);
+  push(OBJ_VAL(k));
+  valueTableSet(&map->entries, OBJ_VAL(k), NUMBER_VAL(tm->tm_min));
+  pop();
+
+  k = copyString("second", 6);
+  push(OBJ_VAL(k));
+  valueTableSet(&map->entries, OBJ_VAL(k), NUMBER_VAL(tm->tm_sec));
+  pop();
+
+  k = copyString("weekday", 7);
+  push(OBJ_VAL(k));
+  valueTableSet(&map->entries, OBJ_VAL(k), NUMBER_VAL(tm->tm_wday));
+  pop();
+
+  pop(); // map GC protection
+  return OBJ_VAL(map);
+}
+
+static Value formatDateNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_NUMBER(args[0]) || !IS_STRING(args[1])) {
+    runtimeError("formatDate() expects (timestamp, formatString).");
+    return NIL_VAL;
+  }
+
+  time_t t = (time_t)AS_NUMBER(args[0]);
+  const char* fmt = AS_CSTRING(args[1]);
+
+  struct tm* tm = localtime(&t);
+  if (tm == NULL) {
+    runtimeError("formatDate() failed to convert timestamp.");
+    return NIL_VAL;
+  }
+
+  char buffer[256];
+  size_t len = strftime(buffer, sizeof(buffer), fmt, tm);
+  if (len == 0) {
+    runtimeError("formatDate() format produced empty or too-long result.");
+    return NIL_VAL;
+  }
+
+  return OBJ_VAL(copyString(buffer, (int)len));
+}
+
+// --- Set native methods ---
+
+static bool checkSetTypeGuard(ObjSet* set, Value value) {
+  if (set->elementType == NULL) return true;
+  if (valueMatchesTypeDescriptor(value, set->elementType)) return true;
+  ObjString* actual = typeOfValue(value);
+  runtimeError("Type error: set expects %s but got %s.",
+               set->elementType->name->chars, actual->chars);
+  return false;
+}
+
+static bool setAdd(Value receiver, int argCount, Value* args,
+                   Value* result) {
+  ObjSet* set = AS_SET(receiver);
+  if (!checkSetTypeGuard(set, args[0])) return false;
+  valueTableSet(&set->entries, args[0], BOOL_VAL(true));
+  *result = NIL_VAL;
+  return true;
+}
+
+static bool setRemove(Value receiver, int argCount, Value* args,
+                      Value* result) {
+  ObjSet* set = AS_SET(receiver);
+  *result = BOOL_VAL(valueTableDelete(&set->entries, args[0]));
+  return true;
+}
+
+static bool setContains(Value receiver, int argCount, Value* args,
+                        Value* result) {
+  ObjSet* set = AS_SET(receiver);
+  Value dummy;
+  *result = BOOL_VAL(valueTableGet(&set->entries, args[0], &dummy));
+  return true;
+}
+
+static bool setClear(Value receiver, int argCount, Value* args,
+                     Value* result) {
+  ObjSet* set = AS_SET(receiver);
+  freeValueTable(&set->entries);
+  initValueTable(&set->entries);
+  *result = NIL_VAL;
+  return true;
+}
+
+static bool setToArray(Value receiver, int argCount, Value* args,
+                       Value* result) {
+  ObjSet* set = AS_SET(receiver);
+  ObjArray* arr = newArray();
+  push(OBJ_VAL(arr)); // GC protect
+  for (int i = 0; i < set->entries.capacity; i++) {
+    ValueEntry* entry = &set->entries.entries[i];
+    if (!entry->occupied) continue;
+    writeValueArray(&arr->elements, entry->key);
+  }
+  pop();
+  *result = OBJ_VAL(arr);
+  return true;
+}
+
+static bool setForEach(Value receiver, int argCount, Value* args,
+                       Value* result) {
+  ObjSet* set = AS_SET(receiver);
+  Value callback = args[0];
+
+  push(receiver);
+  push(callback);
+
+  for (int i = 0; i < set->entries.capacity; i++) {
+    ObjSet* s = AS_SET(vm.stackTop[-2]);
+    ValueEntry* entry = &s->entries.entries[i];
+    if (!entry->occupied) continue;
+
+    Value cb = vm.stackTop[-1];
+    Value cbArgs[1] = { entry->key };
+
+    Value dummy;
+    if (!invokeCallback(cb, 1, cbArgs, &dummy)) {
+      vm.stackTop -= 2;
+      return false;
+    }
+  }
+
+  vm.stackTop -= 2;
+  *result = NIL_VAL;
+  return true;
+}
+
+static bool setUnion(Value receiver, int argCount, Value* args,
+                     Value* result) {
+  if (!IS_SET(args[0])) {
+    runtimeError("union() argument must be a set.");
+    return false;
+  }
+  ObjSet* a = AS_SET(receiver);
+  ObjSet* b = AS_SET(args[0]);
+  ObjSet* out = newSet();
+
+  push(receiver);
+  push(args[0]);
+  push(OBJ_VAL(out));
+
+  for (int i = 0; i < a->entries.capacity; i++) {
+    if (a->entries.entries[i].occupied) {
+      out = AS_SET(vm.stackTop[-1]);
+      valueTableSet(&out->entries, a->entries.entries[i].key,
+                    BOOL_VAL(true));
+    }
+  }
+  b = AS_SET(vm.stackTop[-2]);
+  for (int i = 0; i < b->entries.capacity; i++) {
+    if (b->entries.entries[i].occupied) {
+      out = AS_SET(vm.stackTop[-1]);
+      valueTableSet(&out->entries, b->entries.entries[i].key,
+                    BOOL_VAL(true));
+    }
+  }
+
+  *result = vm.stackTop[-1];
+  vm.stackTop -= 3;
+  return true;
+}
+
+static bool setIntersection(Value receiver, int argCount, Value* args,
+                            Value* result) {
+  if (!IS_SET(args[0])) {
+    runtimeError("intersection() argument must be a set.");
+    return false;
+  }
+  ObjSet* a = AS_SET(receiver);
+  ObjSet* b = AS_SET(args[0]);
+  ObjSet* out = newSet();
+
+  push(receiver);
+  push(args[0]);
+  push(OBJ_VAL(out));
+
+  for (int i = 0; i < a->entries.capacity; i++) {
+    if (a->entries.entries[i].occupied) {
+      Value dummy;
+      b = AS_SET(vm.stackTop[-2]);
+      if (valueTableGet(&b->entries, a->entries.entries[i].key, &dummy)) {
+        out = AS_SET(vm.stackTop[-1]);
+        valueTableSet(&out->entries, a->entries.entries[i].key,
+                      BOOL_VAL(true));
+      }
+    }
+  }
+
+  *result = vm.stackTop[-1];
+  vm.stackTop -= 3;
+  return true;
+}
+
+static bool setDifference(Value receiver, int argCount, Value* args,
+                          Value* result) {
+  if (!IS_SET(args[0])) {
+    runtimeError("difference() argument must be a set.");
+    return false;
+  }
+  ObjSet* a = AS_SET(receiver);
+  ObjSet* b = AS_SET(args[0]);
+  ObjSet* out = newSet();
+
+  push(receiver);
+  push(args[0]);
+  push(OBJ_VAL(out));
+
+  for (int i = 0; i < a->entries.capacity; i++) {
+    if (a->entries.entries[i].occupied) {
+      Value dummy;
+      b = AS_SET(vm.stackTop[-2]);
+      if (!valueTableGet(&b->entries, a->entries.entries[i].key, &dummy)) {
+        out = AS_SET(vm.stackTop[-1]);
+        valueTableSet(&out->entries, a->entries.entries[i].key,
+                      BOOL_VAL(true));
+      }
+    }
+  }
+
+  *result = vm.stackTop[-1];
+  vm.stackTop -= 3;
+  return true;
+}
+
+// --- OS module functions ---
+
+static Value osEnvNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("env() expects a string argument.");
+    return NIL_VAL;
+  }
+  const char* val = getenv(AS_CSTRING(args[0]));
+  if (val == NULL) return NIL_VAL;
+  return OBJ_VAL(copyString(val, (int)strlen(val)));
+}
+
+static Value osSetEnvNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_STRING(args[0]) || !IS_STRING(args[1])) {
+    runtimeError("setEnv() expects (name, value) string arguments.");
+    return NIL_VAL;
+  }
+#ifdef _WIN32
+  _putenv_s(AS_CSTRING(args[0]), AS_CSTRING(args[1]));
+#else
+  setenv(AS_CSTRING(args[0]), AS_CSTRING(args[1]), 1);
+#endif
+  return NIL_VAL;
+}
+
+static Value osExitNative(int argCount, Value* args) {
+  int code = 0;
+  if (argCount == 1) {
+    if (!IS_NUMBER(args[0])) {
+      runtimeError("exit() expects a number argument.");
+      return NIL_VAL;
+    }
+    code = (int)AS_NUMBER(args[0]);
+  } else if (argCount > 1) {
+    runtimeError("exit() expects 0 or 1 arguments.");
+    return NIL_VAL;
+  }
+  exit(code);
+  return NIL_VAL; // unreachable
+}
+
+static Value osPlatformNative(int argCount, Value* args) {
+#ifdef _WIN32
+  return OBJ_VAL(copyString("windows", 7));
+#elif defined(__APPLE__)
+  return OBJ_VAL(copyString("macos", 5));
+#else
+  return OBJ_VAL(copyString("linux", 5));
+#endif
+}
+
+static Value osExecNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("exec() expects a string argument.");
+    return NIL_VAL;
+  }
+
+#ifdef _WIN32
+  FILE* pipe = _popen(AS_CSTRING(args[0]), "r");
+#else
+  FILE* pipe = popen(AS_CSTRING(args[0]), "r");
+#endif
+  if (pipe == NULL) return NIL_VAL;
+
+  char buffer[4096];
+  size_t totalLen = 0;
+  size_t capacity = 4096;
+  char* output = (char*)malloc(capacity);
+  if (output == NULL) {
+#ifdef _WIN32
+    _pclose(pipe);
+#else
+    pclose(pipe);
+#endif
+    return NIL_VAL;
+  }
+
+  size_t bytesRead;
+  while ((bytesRead = fread(buffer, 1, sizeof(buffer), pipe)) > 0) {
+    if (totalLen + bytesRead >= capacity) {
+      capacity *= 2;
+      char* newOutput = (char*)realloc(output, capacity);
+      if (newOutput == NULL) {
+        free(output);
+#ifdef _WIN32
+        _pclose(pipe);
+#else
+        pclose(pipe);
+#endif
+        return NIL_VAL;
+      }
+      output = newOutput;
+    }
+    memcpy(output + totalLen, buffer, bytesRead);
+    totalLen += bytesRead;
+  }
+
+#ifdef _WIN32
+  _pclose(pipe);
+#else
+  pclose(pipe);
+#endif
+
+  // Trim trailing newline.
+  if (totalLen > 0 && output[totalLen - 1] == '\n') {
+    totalLen--;
+    if (totalLen > 0 && output[totalLen - 1] == '\r') totalLen--;
+  }
+
+  ObjString* result = copyString(output, (int)totalLen);
+  free(output);
+  return OBJ_VAL(result);
+}
+
+static Value osArgsNative(int argCount, Value* args) {
+  ObjArray* arr = newArray();
+  push(OBJ_VAL(arr)); // GC protect
+  for (int i = 0; i < vm.argc; i++) {
+    ObjString* s = copyString(vm.argv[i], (int)strlen(vm.argv[i]));
+    push(OBJ_VAL(s));
+    writeValueArray(&arr->elements, OBJ_VAL(s));
+    pop();
+  }
+  pop(); // arr
+  return OBJ_VAL(arr);
+}
+
+// --- Collections module functions ---
+
+static Value collectionsRangeNative(int argCount, Value* args) {
+  double start = 0, end, step;
+  bool hasStep = false;
+
+  if (argCount == 1) {
+    if (!IS_NUMBER(args[0])) {
+      runtimeError("range() arguments must be numbers.");
+      return NIL_VAL;
+    }
+    end = AS_NUMBER(args[0]);
+  } else if (argCount == 2) {
+    if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+      runtimeError("range() arguments must be numbers.");
+      return NIL_VAL;
+    }
+    start = AS_NUMBER(args[0]);
+    end = AS_NUMBER(args[1]);
+  } else if (argCount == 3) {
+    if (!IS_NUMBER(args[0]) || !IS_NUMBER(args[1]) || !IS_NUMBER(args[2])) {
+      runtimeError("range() arguments must be numbers.");
+      return NIL_VAL;
+    }
+    start = AS_NUMBER(args[0]);
+    end = AS_NUMBER(args[1]);
+    step = AS_NUMBER(args[2]);
+    hasStep = true;
+  } else {
+    runtimeError("range() expects 1 to 3 arguments.");
+    return NIL_VAL;
+  }
+
+  if (!hasStep) {
+    step = (start <= end) ? 1 : -1;
+  }
+
+  if (step == 0) {
+    runtimeError("range() step cannot be zero.");
+    return NIL_VAL;
+  }
+  if ((step > 0 && start > end) || (step < 0 && start < end)) {
+    runtimeError("range() step direction conflicts with start/end.");
+    return NIL_VAL;
+  }
+
+  int count = (int)ceil((end - start) / step);
+  if (count < 0) count = 0;
+
+  ObjArray* arr = newArray();
+  push(OBJ_VAL(arr)); // GC protect
+  for (int i = 0; i < count; i++) {
+    writeValueArray(&arr->elements, NUMBER_VAL(start + i * step));
+  }
+  pop();
+  return OBJ_VAL(arr);
+}
+
+static Value collectionsZipNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_ARRAY(args[0]) || !IS_ARRAY(args[1])) {
+    runtimeError("zip() expects two array arguments.");
+    return NIL_VAL;
+  }
+
+  ObjArray* a = AS_ARRAY(args[0]);
+  ObjArray* b = AS_ARRAY(args[1]);
+  int len = a->elements.count < b->elements.count ?
+            a->elements.count : b->elements.count;
+
+  ObjArray* result = newArray();
+  push(OBJ_VAL(result)); // GC protect
+
+  for (int i = 0; i < len; i++) {
+    ObjArray* pair = newArray();
+    push(OBJ_VAL(pair)); // GC protect pair
+    writeValueArray(&pair->elements, a->elements.values[i]);
+    writeValueArray(&pair->elements, b->elements.values[i]);
+    result = AS_ARRAY(vm.stackTop[-2]); // re-read after possible GC
+    writeValueArray(&result->elements, OBJ_VAL(pair));
+    pop(); // pair
+  }
+
+  pop(); // result
+  return OBJ_VAL(result);
+}
+
+static Value collectionsEnumerateNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_ARRAY(args[0])) {
+    runtimeError("enumerate() expects an array argument.");
+    return NIL_VAL;
+  }
+
+  ObjArray* src = AS_ARRAY(args[0]);
+  ObjArray* result = newArray();
+  push(OBJ_VAL(result)); // GC protect
+
+  for (int i = 0; i < src->elements.count; i++) {
+    ObjArray* pair = newArray();
+    push(OBJ_VAL(pair)); // GC protect pair
+    writeValueArray(&pair->elements, NUMBER_VAL(i));
+    writeValueArray(&pair->elements, src->elements.values[i]);
+    result = AS_ARRAY(vm.stackTop[-2]); // re-read after possible GC
+    writeValueArray(&result->elements, OBJ_VAL(pair));
+    pop(); // pair
+  }
+
+  pop(); // result
+  return OBJ_VAL(result);
+}
+
+static Value collectionsSortedNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_ARRAY(args[0])) {
+    runtimeError("sorted() expects an array argument.");
+    return NIL_VAL;
+  }
+
+  ObjArray* src = AS_ARRAY(args[0]);
+  ObjArray* copy = newArray();
+  push(OBJ_VAL(copy)); // GC protect
+
+  // Copy elements.
+  for (int i = 0; i < src->elements.count; i++) {
+    writeValueArray(&copy->elements, src->elements.values[i]);
+  }
+
+  // Validate all elements are sortable primitives.
+  for (int i = 0; i < copy->elements.count; i++) {
+    if (sortTypeOrdinal(copy->elements.values[i]) >= 4) {
+      pop();
+      runtimeError("sorted() array contains non-comparable values.");
+      return NIL_VAL;
+    }
+  }
+
+  qsort(copy->elements.values, copy->elements.count,
+        sizeof(Value), sortCompare);
+
+  pop();
+  return OBJ_VAL(copy);
+}
+
+static Value collectionsReversedNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_ARRAY(args[0])) {
+    runtimeError("reversed() expects an array argument.");
+    return NIL_VAL;
+  }
+
+  ObjArray* src = AS_ARRAY(args[0]);
+  ObjArray* copy = newArray();
+  push(OBJ_VAL(copy)); // GC protect
+
+  for (int i = src->elements.count - 1; i >= 0; i--) {
+    writeValueArray(&copy->elements, src->elements.values[i]);
+  }
+
+  pop();
+  return OBJ_VAL(copy);
 }
 
 // --- File handle methods ---
@@ -1577,6 +2382,77 @@ static Value ioOpenNative(int argCount, Value* args) {
   return OBJ_VAL(objFile);
 }
 
+// --- Error module ---
+
+static ObjClass* errorBaseClass = NULL;
+
+static bool errorInit(Value receiver, int argCount, Value* args,
+                      Value* result) {
+  ObjInstance* instance = AS_INSTANCE(receiver);
+  ObjString* msgKey = copyString("message", 7);
+  push(OBJ_VAL(msgKey));
+  tableSet(&instance->fields, msgKey, args[0]);
+  pop();
+  *result = receiver;
+  return true;
+}
+
+static bool errorToString(Value receiver, int argCount, Value* args,
+                          Value* result) {
+  ObjInstance* instance = AS_INSTANCE(receiver);
+  ObjString* msgKey = copyString("message", 7);
+  push(OBJ_VAL(msgKey));
+
+  const char* typeName = instance->klass->name->chars;
+  int typeLen = instance->klass->name->length;
+  const char* msg = "";
+  int msgLen = 0;
+  Value msgVal;
+  if (tableGet(&instance->fields, msgKey, &msgVal) && IS_STRING(msgVal)) {
+    msg = AS_STRING(msgVal)->chars;
+    msgLen = AS_STRING(msgVal)->length;
+  }
+
+  int totalLen = typeLen + 2 + msgLen;
+  char* buf = ALLOCATE(char, totalLen + 1);
+  memcpy(buf, typeName, typeLen);
+  buf[typeLen] = ':';
+  buf[typeLen + 1] = ' ';
+  memcpy(buf + typeLen + 2, msg, msgLen);
+  buf[totalLen] = '\0';
+
+  pop(); // msgKey
+  *result = OBJ_VAL(takeString(buf, totalLen));
+  return true;
+}
+
+static ObjClass* createErrorSubclass(const char* name,
+                                     ObjClass* superclass) {
+  ObjString* nameStr = copyString(name, (int)strlen(name));
+  push(OBJ_VAL(nameStr));
+  ObjClass* klass = newClass(nameStr);
+  push(OBJ_VAL(klass));
+  klass->superclass = superclass;
+  tableAddAll(&superclass->methods, &klass->methods);
+  pop();
+  pop();
+  return klass;
+}
+
+static Value isErrorNative(int argCount, Value* args) {
+  if (argCount != 1) {
+    runtimeError("isError() expects 1 argument.");
+    return NIL_VAL;
+  }
+  if (!IS_INSTANCE(args[0])) return BOOL_VAL(false);
+  ObjClass* klass = AS_INSTANCE(args[0])->klass;
+  while (klass != NULL) {
+    if (klass == errorBaseClass) return BOOL_VAL(true);
+    klass = klass->superclass;
+  }
+  return BOOL_VAL(false);
+}
+
 // --- Registration helpers ---
 
 static Value typeDescriptorNative(int argCount, Value* args) {
@@ -1628,6 +2504,24 @@ static Value arrayConstructorNative(int argCount, Value* args) {
     return OBJ_VAL(array);
   }
   runtimeError("Array() expects 0 or 1 arguments.");
+  return NIL_VAL;
+}
+
+static Value setConstructorNative(int argCount, Value* args) {
+  if (argCount == 0) return OBJ_VAL(newSet());
+  if (argCount == 1) {
+    ObjTypeDescriptor* desc = resolveTypeArg(args[0]);
+    if (desc == NULL) {
+      runtimeError("Set() argument must be a type or class.");
+      return NIL_VAL;
+    }
+    push(OBJ_VAL(desc));
+    ObjSet* set = newSet();
+    set->elementType = desc;
+    pop();
+    return OBJ_VAL(set);
+  }
+  runtimeError("Set() expects 0 or 1 arguments.");
   return NIL_VAL;
 }
 
@@ -1698,6 +2592,24 @@ static void defineModuleNative(ObjModule* module, const char* name,
   pop();
 }
 
+static void defineModuleConstant(ObjModule* module, const char* name,
+                                 Value value) {
+  push(OBJ_VAL(copyString(name, (int)strlen(name))));
+  push(value);
+  tableSet(&module->values, AS_STRING(vm.stackTop[-2]), vm.stackTop[-1]);
+  pop();
+  pop();
+}
+
+static void defineModuleValue(ObjModule* module, const char* name,
+                              Value value) {
+  push(OBJ_VAL(copyString(name, (int)strlen(name))));
+  push(value);
+  tableSet(&module->values, AS_STRING(vm.stackTop[-2]), vm.stackTop[-1]);
+  pop();
+  pop();
+}
+
 static void defineNativeMethodVar(ObjClass* klass, const char* name,
                                   NativeMethodFn function,
                                   int minArity, int maxArity) {
@@ -1745,6 +2657,18 @@ void registerBuiltins(void) {
   defineNativeMethod(vm.mapMethods, "any", mapAny, 1);
   defineNativeMethod(vm.mapMethods, "all", mapAll, 1);
 
+  vm.setMethods = NULL;
+  vm.setMethods = newClass(copyString("Set", 3));
+  defineNativeMethod(vm.setMethods, "add", setAdd, 1);
+  defineNativeMethod(vm.setMethods, "remove", setRemove, 1);
+  defineNativeMethod(vm.setMethods, "contains", setContains, 1);
+  defineNativeMethod(vm.setMethods, "clear", setClear, 0);
+  defineNativeMethod(vm.setMethods, "toArray", setToArray, 0);
+  defineNativeMethod(vm.setMethods, "forEach", setForEach, 1);
+  defineNativeMethod(vm.setMethods, "union", setUnion, 1);
+  defineNativeMethod(vm.setMethods, "intersection", setIntersection, 1);
+  defineNativeMethod(vm.setMethods, "difference", setDifference, 1);
+
   vm.fileMethods = NULL;
   vm.fileMethods = newClass(copyString("File", 4));
   defineNativeMethod(vm.fileMethods, "read", fileRead, 0);
@@ -1766,11 +2690,16 @@ void registerBuiltins(void) {
   defineNativeMethod(vm.stringMethods, "contains", stringContains, 1);
   defineNativeMethod(vm.stringMethods, "repeat", stringRepeat, 1);
   defineNativeMethod(vm.stringMethods, "charAt", stringCharAt, 1);
+  defineNativeMethodVar(vm.stringMethods, "padStart", stringPadStart, 1, 2);
+  defineNativeMethodVar(vm.stringMethods, "padEnd", stringPadEnd, 1, 2);
+  defineNativeMethod(vm.stringMethods, "trimStart", stringTrimStart, 0);
+  defineNativeMethod(vm.stringMethods, "trimEnd", stringTrimEnd, 0);
 
   defineNative("type", typeNative);
   defineNative("TypeDescriptor", typeDescriptorNative);
   defineNative("Array", arrayConstructorNative);
   defineNative("Map", mapConstructorNative);
+  defineNative("Set", setConstructorNative);
   defineNative("toString", toStringNative);
   defineNative("toNumber", toNumberNative);
   defineNative("toBool", toBoolNative);
@@ -1779,14 +2708,15 @@ void registerBuiltins(void) {
   // Note: nil/true/false are keywords so they can't be identifiers.
   {
     const char* typeNames[] = {
-      "number", "string", "bool", "array", "map", "function"
+      "number", "string", "bool", "array", "map", "set", "function"
     };
-    int typeLens[] = {6, 6, 4, 5, 3, 8};
+    int typeLens[] = {6, 6, 4, 5, 3, 3, 8};
     TypeTag typeTags[] = {
-      TYPETAG_NUMBER, TYPETAG_STRING, TYPETAG_BOOL, TYPETAG_ARRAY, TYPETAG_MAP, TYPETAG_FUNCTION
+      TYPETAG_NUMBER, TYPETAG_STRING, TYPETAG_BOOL, TYPETAG_ARRAY,
+      TYPETAG_MAP, TYPETAG_SET, TYPETAG_FUNCTION
     };
     int i;
-    for (i = 0; i < 6; i++) {
+    for (i = 0; i < 7; i++) {
       ObjString* tname = copyString(typeNames[i], typeLens[i]);
       push(OBJ_VAL(tname));
       ObjTypeDescriptor* desc = newTypeDescriptor(typeTags[i], tname, NULL);
@@ -1808,10 +2738,33 @@ void registerBuiltins(void) {
   defineModuleNative(mathModule, "pow", powNative);
   defineModuleNative(mathModule, "random", randomNative);
   defineModuleNative(mathModule, "parseNumber", parseNumberNative);
+  defineModuleNative(mathModule, "sin", sinNative);
+  defineModuleNative(mathModule, "cos", cosNative);
+  defineModuleNative(mathModule, "tan", tanNative);
+  defineModuleNative(mathModule, "asin", asinNative);
+  defineModuleNative(mathModule, "acos", acosNative);
+  defineModuleNative(mathModule, "atan", atanNative);
+  defineModuleNative(mathModule, "atan2", atan2Native);
+  defineModuleNative(mathModule, "log", logNative);
+  defineModuleNative(mathModule, "log10", log10Native);
+  defineModuleNative(mathModule, "log2", log2Native);
+  defineModuleNative(mathModule, "exp", expNative);
+  defineModuleNative(mathModule, "clamp", clampNative);
+  defineModuleNative(mathModule, "lerp", lerpNative);
+  defineModuleNative(mathModule, "sign", signNative);
+  defineModuleConstant(mathModule, "PI",
+                       NUMBER_VAL(3.14159265358979323846));
+  defineModuleConstant(mathModule, "E",
+                       NUMBER_VAL(2.71828182845904523536));
+  defineModuleConstant(mathModule, "INF", NUMBER_VAL(INFINITY));
 
   // Built-in 'time' module.
   ObjModule* timeModule = registerBuiltinModule("time");
   defineModuleNative(timeModule, "clock", clockNative);
+  defineModuleNative(timeModule, "timestamp", timestampNative);
+  defineModuleNative(timeModule, "sleep", sleepNative);
+  defineModuleNative(timeModule, "dateParts", datePartsNative);
+  defineModuleNative(timeModule, "formatDate", formatDateNative);
 
   // Built-in 'io' module.
   ObjModule* ioModule = registerBuiltinModule("io");
@@ -1822,6 +2775,50 @@ void registerBuiltins(void) {
   defineModuleNative(ioModule, "fileExists", ioFileExistsNative);
   defineModuleNative(ioModule, "deleteFile", ioDeleteFileNative);
   defineModuleNative(ioModule, "open", ioOpenNative);
+
+  // Built-in 'os' module.
+  ObjModule* osModule = registerBuiltinModule("os");
+  defineModuleNative(osModule, "env", osEnvNative);
+  defineModuleNative(osModule, "setEnv", osSetEnvNative);
+  defineModuleNative(osModule, "exit", osExitNative);
+  defineModuleNative(osModule, "platform", osPlatformNative);
+  defineModuleNative(osModule, "exec", osExecNative);
+  defineModuleNative(osModule, "args", osArgsNative);
+
+  // Built-in 'collections' module.
+  ObjModule* collectionsModule = registerBuiltinModule("collections");
+  defineModuleNative(collectionsModule, "range", collectionsRangeNative);
+  defineModuleNative(collectionsModule, "zip", collectionsZipNative);
+  defineModuleNative(collectionsModule, "enumerate",
+                     collectionsEnumerateNative);
+  defineModuleNative(collectionsModule, "sorted", collectionsSortedNative);
+  defineModuleNative(collectionsModule, "reversed",
+                     collectionsReversedNative);
+
+  // Built-in 'error' module.
+  // NOTE: defineNativeMethod uses vm.stack[0] and vm.stack[1] (absolute),
+  // so the stack MUST be empty when calling it.
+  ObjModule* errorModule = registerBuiltinModule("error");
+  errorBaseClass = newClass(copyString("Error", 5));
+  defineNativeMethod(errorBaseClass, "init", errorInit, 1);
+  defineNativeMethod(errorBaseClass, "__toString__", errorToString, 0);
+  defineModuleValue(errorModule, "Error", OBJ_VAL(errorBaseClass));
+
+  {
+    ObjClass* typeError = createErrorSubclass("TypeError", errorBaseClass);
+    defineModuleValue(errorModule, "TypeError", OBJ_VAL(typeError));
+
+    ObjClass* valueError = createErrorSubclass("ValueError", errorBaseClass);
+    defineModuleValue(errorModule, "ValueError", OBJ_VAL(valueError));
+
+    ObjClass* rangeError = createErrorSubclass("RangeError", errorBaseClass);
+    defineModuleValue(errorModule, "RangeError", OBJ_VAL(rangeError));
+
+    ObjClass* ioError = createErrorSubclass("IOError", errorBaseClass);
+    defineModuleValue(errorModule, "IOError", OBJ_VAL(ioError));
+
+    defineModuleNative(errorModule, "isError", isErrorNative);
+  }
 
   srand((unsigned int)time(NULL));
 }

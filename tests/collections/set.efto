@@ -1,0 +1,47 @@
+// Set type: creation, add, remove, contains, size.
+
+// Create an empty set.
+var s = Set();
+print s.size; // expect: 0
+
+// Add elements.
+s.add(1);
+s.add(2);
+s.add(3);
+print s.size; // expect: 3
+
+// Duplicate add does not increase size.
+s.add(2);
+print s.size; // expect: 3
+
+// contains checks membership.
+print s.contains(1); // expect: true
+print s.contains(2); // expect: true
+print s.contains(99); // expect: false
+
+// remove returns true when element existed.
+print s.remove(2); // expect: true
+print s.size; // expect: 2
+print s.contains(2); // expect: false
+
+// remove returns false when element didn't exist.
+print s.remove(99); // expect: false
+
+// clear empties the set.
+s.clear();
+print s.size; // expect: 0
+
+// toArray converts set to array.
+var s2 = Set();
+s2.add("a");
+s2.add("b");
+var arr = s2.toArray();
+print arr.length; // expect: 2
+
+// Typed set.
+var nums = Set(number);
+nums.add(42);
+print nums.size; // expect: 1
+
+// Type check.
+print type(Set()); // expect: set

@@ -62,6 +62,7 @@ typedef struct {
   ObjClass* arrayMethods;
   ObjClass* fileMethods;
   ObjClass* mapMethods;
+  ObjClass* setMethods;
   ObjClass* stringMethods;
   ObjUpvalue* openUpvalues;
   Table importCache;
@@ -72,6 +73,8 @@ typedef struct {
   ExceptionHandler exceptionHandlers[EXCEPTION_HANDLER_MAX];
   int exceptionHandlerCount;
   Value currentException;
+  int argc;
+  const char** argv;
   Obj* objects;
   int grayCount;
   int grayCapacity;

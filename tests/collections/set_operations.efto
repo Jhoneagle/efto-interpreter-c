@@ -1,0 +1,45 @@
+// Set operations: union, intersection, difference, forEach.
+
+// union combines elements from both sets.
+var a = Set();
+a.add(1);
+a.add(2);
+a.add(3);
+
+var b = Set();
+b.add(2);
+b.add(3);
+b.add(4);
+
+var u = a.union(b);
+print u.size; // expect: 4
+print u.contains(1); // expect: true
+print u.contains(4); // expect: true
+
+// intersection keeps only common elements.
+var inter = a.intersection(b);
+print inter.size; // expect: 2
+print inter.contains(2); // expect: true
+print inter.contains(3); // expect: true
+print inter.contains(1); // expect: false
+
+// difference keeps elements in a but not in b.
+var diff = a.difference(b);
+print diff.size; // expect: 1
+print diff.contains(1); // expect: true
+print diff.contains(2); // expect: false
+
+// forEach iterates all elements.
+var items = [];
+var s = Set();
+s.add(10);
+s.add(20);
+s.forEach((x) => {
+  items.push(x);
+});
+items.sort();
+print items; // expect: [10, 20]
+
+// Original sets are unchanged after operations.
+print a.size; // expect: 3
+print b.size; // expect: 3

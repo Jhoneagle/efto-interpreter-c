@@ -1,0 +1,26 @@
+// Collections module: range function.
+import collections;
+
+// range(end) - from 0 to end.
+print collections.range(5); // expect: [0, 1, 2, 3, 4]
+
+// range(start, end).
+print collections.range(2, 6); // expect: [2, 3, 4, 5]
+
+// range(start, end, step).
+print collections.range(0, 10, 2); // expect: [0, 2, 4, 6, 8]
+
+// Descending range (auto step = -1).
+print collections.range(5, 0); // expect: [5, 4, 3, 2, 1]
+
+// Descending with explicit step.
+print collections.range(10, 0, -3); // expect: [10, 7, 4, 1]
+
+// Empty range (start == end).
+print collections.range(5, 5); // expect: []
+
+// range(0) produces empty array.
+print collections.range(0); // expect: []
+
+// Single element range.
+print collections.range(1); // expect: [0]

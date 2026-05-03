@@ -1,0 +1,20 @@
+// Collections module: zip and enumerate.
+import collections;
+
+// zip two equal-length arrays.
+print collections.zip([1, 2, 3], ["a", "b", "c"]); // expect: [[1, a], [2, b], [3, c]]
+
+// zip truncates to shorter array.
+print collections.zip([1, 2], ["a", "b", "c"]); // expect: [[1, a], [2, b]]
+
+// zip with empty array.
+print collections.zip([], [1, 2, 3]); // expect: []
+
+// enumerate returns [index, value] pairs.
+print collections.enumerate(["a", "b", "c"]); // expect: [[0, a], [1, b], [2, c]]
+
+// enumerate empty array.
+print collections.enumerate([]); // expect: []
+
+// enumerate single element.
+print collections.enumerate(["x"]); // expect: [[0, x]]

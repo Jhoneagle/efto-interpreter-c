@@ -109,6 +109,12 @@ static void blackenObject(Obj* object) {
       if (map->valueType) markObject((Obj*)map->valueType);
       break;
     }
+    case OBJ_SET: {
+      ObjSet* set = (ObjSet*)object;
+      markValueTable(&set->entries);
+      if (set->elementType) markObject((Obj*)set->elementType);
+      break;
+    }
     case OBJ_CLASS: {
       ObjClass* klass = (ObjClass*)object;
       markObject((Obj*)klass->name);
@@ -209,6 +215,12 @@ static void freeObject(Obj* object) {
       FREE(ObjMap, object);
       break;
     }
+    case OBJ_SET: {
+      ObjSet* set = (ObjSet*)object;
+      freeValueTable(&set->entries);
+      FREE(ObjSet, object);
+      break;
+    }
     case OBJ_MODULE: {
       ObjModule* module = (ObjModule*)object;
       freeTable(&module->values);
@@ -282,6 +294,7 @@ static void markRoots() {
   markObject((Obj*)vm.arrayMethods);
   markObject((Obj*)vm.fileMethods);
   markObject((Obj*)vm.mapMethods);
+  markObject((Obj*)vm.setMethods);
   markObject((Obj*)vm.stringMethods);
   markTable(&vm.importCache);
   for (int i = 0; i < vm.searchPathCount; i++) {

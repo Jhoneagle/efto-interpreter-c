@@ -1,0 +1,45 @@
+// Extended math module functions and constants.
+import math;
+
+// Trig functions (using known values).
+print math.sin(0); // expect: 0
+print math.cos(0); // expect: 1
+print math.tan(0); // expect: 0
+
+// Inverse trig.
+print math.asin(0); // expect: 0
+print math.acos(1); // expect: 0
+print math.atan(0); // expect: 0
+
+// atan2.
+print math.atan2(0, 1); // expect: 0
+
+// Logarithms.
+print math.log(1); // expect: 0
+print math.log10(100); // expect: 2
+print math.log2(8); // expect: 3
+
+// Exponential.
+print math.exp(0); // expect: 1
+
+// clamp.
+print math.clamp(5, 0, 10); // expect: 5
+print math.clamp(-5, 0, 10); // expect: 0
+print math.clamp(15, 0, 10); // expect: 10
+
+// lerp.
+print math.lerp(0, 10, 0.5); // expect: 5
+print math.lerp(0, 10, 0); // expect: 0
+print math.lerp(0, 10, 1); // expect: 10
+
+// sign.
+print math.sign(42); // expect: 1
+print math.sign(-7); // expect: -1
+print math.sign(0); // expect: 0
+
+// Constants.
+print math.PI > 3.14; // expect: true
+print math.PI < 3.15; // expect: true
+print math.E > 2.71; // expect: true
+print math.E < 2.72; // expect: true
+print math.INF > 999999999; // expect: true

@@ -1,0 +1,47 @@
+// String padStart and padEnd methods.
+
+// padStart with custom padding.
+print "5".padStart(4, "0"); // expect: 0005
+
+// padStart when string is already long enough.
+print "hello".padStart(3); // expect: hello
+
+// padStart with multi-char pad string (wraps cyclically).
+print "x".padStart(6, "ab"); // expect: ababax
+
+// padEnd with custom padding.
+print "5".padEnd(4, "0"); // expect: 5000
+
+// padEnd when string is already long enough.
+print "hello".padEnd(3); // expect: hello
+
+// padEnd with multi-char pad string.
+print "x".padEnd(6, "ab"); // expect: xababa
+
+// padStart with default space padding (verify length).
+print "hi".padStart(5).length; // expect: 5
+
+// padEnd with default space padding (verify length).
+print "hi".padEnd(5).length; // expect: 5
+
+// trimStart removes leading whitespace only.
+print "  hello".trimStart(); // expect: hello
+
+// trimEnd removes trailing whitespace only.
+print "hello  ".trimEnd(); // expect: hello
+
+// trimStart preserves trailing whitespace, trimEnd preserves leading.
+print "  hello  ".trimStart().length; // expect: 7
+print "  hello  ".trimEnd().length; // expect: 7
+
+// trimStart on already trimmed string.
+print "hello".trimStart(); // expect: hello
+
+// trimEnd on already trimmed string.
+print "hello".trimEnd(); // expect: hello
+
+// trimStart with tabs and newlines.
+print "\t\n hi".trimStart(); // expect: hi
+
+// trimEnd with tabs and newlines.
+print "hi \t\n".trimEnd(); // expect: hi
