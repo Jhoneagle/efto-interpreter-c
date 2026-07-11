@@ -1222,40 +1222,38 @@ static void tryStatement() {
     currentChunk()->code[endTryPos] = OP_NOP;
   }
 
-  bool hasFinally = false;
-  if (match(TOKEN_FINALLY)) {
-    hasFinally = true;
+  bool hasFinally = match(TOKEN_FINALLY);
 
-    // Emit OP_ENTER_FINALLY for normal path.
-    emitBytes(OP_ENTER_FINALLY, COMPLETE_NORMAL);
+  // Always emit a finally section — an empty one when there is no `finally`
+  // clause. Treating "no finally" as "empty finally" keeps the
+  // OP_SETUP_FINALLY handler valid and lets return/break/continue (and
+  // exceptions) route through OP_ENTER/END_FINALLY uniformly, including from a
+  // catch block or a catch-only try. (Previously OP_SETUP_FINALLY was NOP'd and
+  // the enter-finally jumps left unpatched, so a return/break/continue inside a
+  // catch-only try jumped to garbage.)
 
-    // Patch all enter-finally jumps (return/break/continue through finally).
-    for (int i = 0; i < finallyCtx.enterJumpCount; i++) {
-      patchJump(finallyCtx.enterJumps[i]);
-    }
+  // Normal-path (fall-through) entry into the finally section.
+  emitBytes(OP_ENTER_FINALLY, COMPLETE_NORMAL);
 
-    // Patch OP_SETUP_FINALLY to point here (start of finally body).
-    int finallyStart = currentChunk()->count;
-    int finallyOffset = finallyStart - (setupFinallyPos + 3);
-    currentChunk()->code[setupFinallyPos + 1] =
-        (finallyOffset >> 8) & 0xff;
-    currentChunk()->code[setupFinallyPos + 2] =
-        finallyOffset & 0xff;
+  // Route return/break/continue enter-jumps to the finally body.
+  for (int i = 0; i < finallyCtx.enterJumpCount; i++) {
+    patchJump(finallyCtx.enterJumps[i]);
+  }
 
+  // Point OP_SETUP_FINALLY's handler at the finally body.
+  int finallyStart = currentChunk()->count;
+  int finallyOffset = finallyStart - (setupFinallyPos + 3);
+  currentChunk()->code[setupFinallyPos + 1] = (finallyOffset >> 8) & 0xff;
+  currentChunk()->code[setupFinallyPos + 2] = finallyOffset & 0xff;
+
+  if (hasFinally) {
     consume(TOKEN_LEFT_BRACE, "Expect '{' after 'finally'.");
     beginScope();
     block();
     endScope();
-
-    emitByte(OP_END_FINALLY);
   }
 
-  if (!hasFinally) {
-    // NOP out OP_SETUP_FINALLY.
-    currentChunk()->code[setupFinallyPos] = OP_NOP;
-    currentChunk()->code[setupFinallyPos + 1] = OP_NOP;
-    currentChunk()->code[setupFinallyPos + 2] = OP_NOP;
-  }
+  emitByte(OP_END_FINALLY);
 
   // Pop finally context.
   currentFinally = finallyCtx.enclosing;

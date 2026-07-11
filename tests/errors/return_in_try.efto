@@ -1,0 +1,76 @@
+// return / break / continue inside a try that has a catch but NO finally used
+// to emit OP_ENTER_FINALLY with an unpatched jump (and, from a catch block, to
+// over-pop the handler), corrupting execution. Regression test.
+import { ValueError } from error;
+
+fun f(x) { return x + 1; }
+
+// Return a call result from the try body (catch, no finally).
+fun g() {
+  try {
+    return f(41);
+  } catch (e) {
+    return -1;
+  }
+}
+print g(); // expect: 42
+
+// Return a literal from the try body.
+fun h() {
+  try {
+    return "ok";
+  } catch (e) {
+    return "err";
+  }
+}
+print h(); // expect: ok
+
+// Return from INSIDE a catch block (the handler is already consumed).
+fun j() {
+  try {
+    throw ValueError("boom");
+  } catch (ValueError e) {
+    return "caught";
+  }
+}
+print j(); // expect: caught
+
+// A bare `return;` inside a try body.
+fun k() {
+  try {
+    return;
+  } catch (e) {}
+  print "unreachable";
+}
+k();
+print "k-done"; // expect: k-done
+
+// break / continue inside a catch-only try within a loop.
+fun loopy() {
+  var total = 0;
+  for (var i in [1, 2, 3, 4, 5]) {
+    try {
+      if (i == 2) continue;
+      if (i == 4) break;
+      total = total + i;
+    } catch (e) {
+      total = -100;
+    }
+  }
+  return total;
+}
+print loopy(); // expect: 4
+
+// return in try WITH finally still returns correctly and runs the finally.
+var order = [];
+fun wf() {
+  try {
+    order.push("try");
+    return 99;
+  } finally {
+    order.push("finally");
+  }
+}
+print wf();     // expect: 99
+print order[0]; // expect: try
+print order[1]; // expect: finally
