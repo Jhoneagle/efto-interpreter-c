@@ -1,0 +1,24 @@
+// Native functions can raise catchable Error instances (Commit 1).
+import io;
+import { IOError, Error } from error;
+
+// A failing io.readFile raises a catchable IOError, not an abort.
+try {
+  io.readFile("tests/errors/_no_such_file_xyz.txt");
+  print "unreachable";
+} catch (IOError e) {
+  print "caught"; // expect: caught
+  print e is IOError; // expect: true
+  print e is Error; // expect: true
+  print e.message; // expect: Could not read file 'tests/errors/_no_such_file_xyz.txt'.
+}
+
+// The raised value participates in normal union/untyped catch too.
+try {
+  io.readFile("tests/errors/_still_missing.txt");
+} catch (e) {
+  print "fallback"; // expect: fallback
+}
+
+// Control resumes normally after a caught native error.
+print "after"; // expect: after

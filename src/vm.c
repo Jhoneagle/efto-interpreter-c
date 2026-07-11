@@ -67,6 +67,37 @@ static void resetStack() {
   vm.openUpvalues = NULL;
   vm.exceptionHandlerCount = 0;
   vm.currentException = NIL_VAL;
+  vm.nativeError = false;
+  vm.nativeErrorValue = NIL_VAL;
+}
+
+// Raise a catchable Error instance from a native function. Sets the
+// vm.nativeError flag; the native must return promptly (false for method
+// natives, any value for global natives) so the call site can convert this
+// into a real exception via throwException. Mirrors errorInit's field setup.
+bool raiseError(ObjClass* klass, const char* format, ...) {
+  if (klass == NULL) klass = vm.errorClass;
+
+  char buffer[512];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(buffer, sizeof(buffer), format, args);
+  va_end(args);
+
+  ObjInstance* instance = newInstance(klass);
+  push(OBJ_VAL(instance)); // GC protect while building message
+  ObjString* msg = copyString(buffer, (int)strlen(buffer));
+  push(OBJ_VAL(msg));
+  ObjString* msgKey = copyString("message", 7);
+  push(OBJ_VAL(msgKey));
+  tableSet(&instance->fields, msgKey, OBJ_VAL(msg));
+  pop(); // msgKey
+  pop(); // msg
+  pop(); // instance
+
+  vm.nativeError = true;
+  vm.nativeErrorValue = OBJ_VAL(instance);
+  return false;
 }
 
 void runtimeError(const char* format, ...) {
@@ -502,6 +533,12 @@ bool callValue(Value callee, int argCount) {
             Value receiver = vm.stackTop[-argCount - 1];
             if (!native->function(receiver, argCount,
                                   vm.stackTop - argCount, &result)) {
+              if (vm.nativeError) {
+                vm.nativeError = false;
+                vm.stackTop -= argCount + 1; // discard args + instance
+                if (!throwException(vm.nativeErrorValue)) return false;
+                return true;
+              }
               return false;
             }
             vm.stackTop -= argCount; // pop args, leave instance
@@ -521,6 +558,12 @@ bool callValue(Value callee, int argCount) {
       case OBJ_NATIVE: {
         NativeFn native = AS_NATIVE(callee);
         Value result = native(argCount, vm.stackTop - argCount);
+        if (vm.nativeError) {
+          vm.nativeError = false;
+          vm.stackTop -= argCount + 1; // discard args + callee
+          if (!throwException(vm.nativeErrorValue)) return false;
+          return true; // handler installed; caller reloads frame
+        }
         vm.stackTop -= argCount + 1;
         push(result);
         return true;
@@ -628,6 +671,12 @@ static bool invokeFromClass(ObjClass* klass, ObjString* name, int argCount) {
     Value result;
     if (!native->function(receiver, argCount,
                           vm.stackTop - argCount, &result)) {
+      if (vm.nativeError) {
+        vm.nativeError = false;
+        vm.stackTop -= argCount + 1; // discard args + receiver
+        if (!throwException(vm.nativeErrorValue)) return false;
+        return true;
+      }
       return false;
     }
     vm.stackTop -= argCount + 1;

@@ -321,6 +321,13 @@ static void markRoots() {
   markObject((Obj*)vm.setMethods);
   markObject((Obj*)vm.stringMethods);
   markObject((Obj*)vm.stopIterationClass);
+  markObject((Obj*)vm.errorClass);
+  markObject((Obj*)vm.valueErrorClass);
+  markObject((Obj*)vm.typeErrorClass);
+  markObject((Obj*)vm.rangeErrorClass);
+  markObject((Obj*)vm.ioErrorClass);
+  markObject((Obj*)vm.assertionErrorClass);
+  markValue(vm.nativeErrorValue);
   markTable(&vm.importCache);
   for (int i = 0; i < vm.searchPathCount; i++) {
     markObject((Obj*)vm.searchPaths[i]);

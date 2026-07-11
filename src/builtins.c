@@ -2385,7 +2385,8 @@ static Value ioReadFileNative(int argCount, Value* args) {
 
   FILE* file = fopen(AS_CSTRING(args[0]), "r");
   if (file == NULL) {
-    runtimeError("Could not read file '%s'.", AS_CSTRING(args[0]));
+    raiseError(vm.ioErrorClass, "Could not read file '%s'.",
+               AS_CSTRING(args[0]));
     return NIL_VAL;
   }
 
@@ -3166,19 +3167,30 @@ void registerBuiltins(void) {
   defineNativeMethod(errorBaseClass, "init", errorInit, 1);
   defineNativeMethod(errorBaseClass, "__toString__", errorToString, 0);
   defineModuleValue(errorModule, "Error", OBJ_VAL(errorBaseClass));
+  vm.errorClass = errorBaseClass;
 
   {
     ObjClass* typeError = createErrorSubclass("TypeError", errorBaseClass);
     defineModuleValue(errorModule, "TypeError", OBJ_VAL(typeError));
+    vm.typeErrorClass = typeError;
 
     ObjClass* valueError = createErrorSubclass("ValueError", errorBaseClass);
     defineModuleValue(errorModule, "ValueError", OBJ_VAL(valueError));
+    vm.valueErrorClass = valueError;
 
     ObjClass* rangeError = createErrorSubclass("RangeError", errorBaseClass);
     defineModuleValue(errorModule, "RangeError", OBJ_VAL(rangeError));
+    vm.rangeErrorClass = rangeError;
 
     ObjClass* ioError = createErrorSubclass("IOError", errorBaseClass);
     defineModuleValue(errorModule, "IOError", OBJ_VAL(ioError));
+    vm.ioErrorClass = ioError;
+
+    ObjClass* assertionError =
+        createErrorSubclass("AssertionError", errorBaseClass);
+    defineModuleValue(errorModule, "AssertionError",
+                      OBJ_VAL(assertionError));
+    vm.assertionErrorClass = assertionError;
 
     vm.stopIterationClass =
         createErrorSubclass("StopIteration", errorBaseClass);

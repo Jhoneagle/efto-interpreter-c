@@ -1,0 +1,5 @@
+// An uncaught native error prints "ClassName: message" and exits 70 (Commit 1).
+import io;
+
+io.readFile("tests/errors/_definitely_missing.txt");
+// expect runtime error: IOError: Could not read file 'tests/errors/_definitely_missing.txt'.

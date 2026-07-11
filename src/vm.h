@@ -69,6 +69,14 @@ typedef struct {
   ObjClass* setMethods;
   ObjClass* stringMethods;
   ObjClass* stopIterationClass;
+  ObjClass* errorClass;
+  ObjClass* valueErrorClass;
+  ObjClass* typeErrorClass;
+  ObjClass* rangeErrorClass;
+  ObjClass* ioErrorClass;
+  ObjClass* assertionErrorClass;
+  bool nativeError;
+  Value nativeErrorValue;
   ObjUpvalue* openUpvalues;
   Table importCache;
   ObjString* searchPaths[8];
@@ -101,6 +109,7 @@ void push(Value value);
 Value pop();
 char* readFile(const char* path);
 void runtimeError(const char* format, ...);
+bool raiseError(ObjClass* klass, const char* format, ...);
 bool vmCallValue(Value callee, int argCount, Value* result);
 int getCallableArity(Value callee);
 bool callMagicBinary(Value left, ObjString* name,
