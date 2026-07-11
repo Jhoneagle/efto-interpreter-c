@@ -77,6 +77,7 @@ typedef struct {
   ObjClass* assertionErrorClass;
   bool nativeError;
   Value nativeErrorValue;
+  bool pendingUnwind;
   ObjUpvalue* openUpvalues;
   Table importCache;
   ObjString* searchPaths[8];
@@ -97,7 +98,12 @@ typedef struct {
 typedef enum {
   INTERPRET_OK,
   INTERPRET_COMPILE_ERROR,
-  INTERPRET_RUNTIME_ERROR
+  INTERPRET_RUNTIME_ERROR,
+  // Internal sentinel: an exception is unwinding toward a handler owned by an
+  // outer run() invocation. Never escapes to interpret(); a re-entrant run()
+  // returns this so its caller (vmCallValue / callMagic*) aborts and the outer
+  // run() lands on the handler. See throwException / tryLandUnwind in vm.c.
+  INTERPRET_UNWIND
 } InterpretResult;
 
 extern VM vm;

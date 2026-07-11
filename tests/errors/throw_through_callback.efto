@@ -1,0 +1,62 @@
+// Exceptions thrown inside higher-order callbacks unwind soundly to a handler
+// installed OUTSIDE the callback (Commit 1.5).
+import io;
+import { ValueError } from error;
+
+// 1. throw in a forEach callback, caught by a try wrapping the forEach call.
+try {
+  [1, 2, 3].forEach((x) => {
+    if (x == 2) throw ValueError("boom");
+  });
+  print "unreachable";
+} catch (ValueError e) {
+  print "caught: " + e.message; // expect: caught: boom
+}
+
+// 2. throw in a map callback, caught outside.
+try {
+  [10, 20, 30].map((x) => {
+    if (x == 20) throw ValueError("map-boom");
+    return x;
+  });
+} catch (e) {
+  print "caught: " + e.message; // expect: caught: map-boom
+}
+
+// 3. Nested higher-order: throw from an inner forEach, caught at the top.
+try {
+  [[1, 2], [3, 4]].forEach((row) => {
+    row.forEach((v) => {
+      if (v == 3) throw ValueError("nested");
+    });
+  });
+} catch (e) {
+  print "caught: " + e.message; // expect: caught: nested
+}
+
+// 4. A native (io.readFile) that raises inside a callback also unwinds out.
+try {
+  [1].forEach((x) => {
+    io.readFile("tests/errors/_missing_in_cb.txt");
+  });
+} catch (e) {
+  print "caught native"; // expect: caught native
+}
+
+// 5. A try INSIDE the callback still catches locally (this also exercises the
+// fix for closures defined inside a try — their return must not emit finally
+// bytecode). Must not regress.
+[1, 2, 3].forEach((x) => {
+  try {
+    if (x == 2) throw ValueError("local");
+    print "ok ${x}";
+  } catch (e) {
+    print "inner: " + e.message;
+  }
+});
+// expect: ok 1
+// expect: inner: local
+// expect: ok 3
+
+// 6. Control resumes normally after all of the above.
+print "done"; // expect: done

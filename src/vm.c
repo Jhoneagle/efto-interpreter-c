@@ -69,6 +69,7 @@ static void resetStack() {
   vm.currentException = NIL_VAL;
   vm.nativeError = false;
   vm.nativeErrorValue = NIL_VAL;
+  vm.pendingUnwind = false;
 }
 
 // Raise a catchable Error instance from a native function. Sets the
@@ -123,40 +124,80 @@ void runtimeError(const char* format, ...) {
   resetStack();
 }
 
+// Begin throwing an exception. This does NOT unwind the stack immediately:
+// unwinding is deferred so that intermediate native frames (e.g. a forEach
+// running a callback via a nested run()) can return through the C stack and
+// perform their own cleanup before we reset stackTop/frameCount. The run()
+// loop drives the actual landing via tryLandUnwind(), one run level at a time.
+//
+// Returns false only when there is no handler at all (uncaught): in that case
+// it prints the error and resets the stack. Otherwise it sets vm.pendingUnwind
+// and returns true; the caller must then attempt to land (tryLandUnwind).
 static bool throwException(Value value) {
-  vm.currentException = value;
-
-  while (vm.exceptionHandlerCount > 0) {
-    ExceptionHandler* handler =
-        &vm.exceptionHandlers[vm.exceptionHandlerCount - 1];
-    vm.exceptionHandlerCount--;
-
-    // Restore VM state.
-    vm.stackTop = handler->stackTop;
-    vm.frameCount = handler->frameCount;
-    closeUpvalues(vm.stackTop);
-
-    if (handler->type == HANDLER_CATCH) {
-      // Push exception value for catch block.
-      push(value);
+  if (vm.exceptionHandlerCount == 0) {
+    // No handler anywhere — print as runtime error (frames still intact).
+    if (IS_STRING(value)) {
+      runtimeError("%s", AS_STRING(value)->chars);
     } else {
-      // HANDLER_FINALLY: push completion state (exception tag + value).
-      push(INT_VAL(COMPLETE_EXCEPTION));
-      push(value);
+      ObjString* str = stringify(value);
+      runtimeError("%s", str->chars);
     }
-
-    handler->frame->ip = handler->handlerIp;
-    return true;
+    return false;
   }
 
-  // No handler found — print as runtime error.
-  if (IS_STRING(value)) {
-    runtimeError("%s", AS_STRING(value)->chars);
+  vm.currentException = value;
+  vm.pendingUnwind = true;
+  return true;
+}
+
+// While an unwind is pending, land on the topmost handler if it is owned by the
+// run() whose base is baseFrame (i.e. installed above baseFrame). If the
+// topmost handler belongs to an outer run, return INTERPRET_UNWIND so this
+// run() aborts and the outer run() lands instead. On landing, restores the
+// stack/frame, pushes the exception (catch) or completion (finally), points the
+// handler frame's ip at the handler body, and updates *framePtr.
+static InterpretResult tryLandUnwind(CallFrame** framePtr, int baseFrame) {
+  ExceptionHandler* handler =
+      &vm.exceptionHandlers[vm.exceptionHandlerCount - 1];
+
+  if (handler->frameCount <= baseFrame) {
+    return INTERPRET_UNWIND; // handler owned by an outer run — keep unwinding
+  }
+
+  vm.exceptionHandlerCount--;
+  vm.frameCount = handler->frameCount;
+  closeUpvalues(handler->stackTop);
+  vm.stackTop = handler->stackTop;
+
+  Value value = vm.currentException;
+  if (handler->type == HANDLER_CATCH) {
+    push(value);
   } else {
-    ObjString* str = stringify(value);
-    runtimeError("%s", str->chars);
+    // HANDLER_FINALLY: push completion state (exception tag + value).
+    push(INT_VAL(COMPLETE_EXCEPTION));
+    push(value);
   }
-  return false;
+
+  handler->frame->ip = handler->handlerIp;
+  vm.pendingUnwind = false;
+  *framePtr = &vm.frames[vm.frameCount - 1];
+  return INTERPRET_OK;
+}
+
+// Handle a false return from a call/invoke/magic dispatch at a run() call site.
+// Converts a pending native error into a throw, then either lands on a handler
+// owned by this run (returns INTERPRET_OK — caller reloads frame and resumes),
+// propagates the unwind (INTERPRET_UNWIND), or reports a genuine runtime error
+// (INTERPRET_RUNTIME_ERROR, already printed by runtimeError).
+static InterpretResult postCallFailure(CallFrame** framePtr, int baseFrame) {
+  if (vm.nativeError) {
+    vm.nativeError = false;
+    if (!throwException(vm.nativeErrorValue)) return INTERPRET_RUNTIME_ERROR;
+  }
+  if (!vm.pendingUnwind) {
+    return INTERPRET_RUNTIME_ERROR; // genuine error; stack already reset
+  }
+  return tryLandUnwind(framePtr, baseFrame);
 }
 
 ObjString* stringify(Value value) {
@@ -534,10 +575,8 @@ bool callValue(Value callee, int argCount) {
             if (!native->function(receiver, argCount,
                                   vm.stackTop - argCount, &result)) {
               if (vm.nativeError) {
-                vm.nativeError = false;
-                vm.stackTop -= argCount + 1; // discard args + instance
-                if (!throwException(vm.nativeErrorValue)) return false;
-                return true;
+                // Discard args + instance; the run() call site throws.
+                vm.stackTop -= argCount + 1;
               }
               return false;
             }
@@ -558,13 +597,12 @@ bool callValue(Value callee, int argCount) {
       case OBJ_NATIVE: {
         NativeFn native = AS_NATIVE(callee);
         Value result = native(argCount, vm.stackTop - argCount);
+        vm.stackTop -= argCount + 1; // discard args + callee
         if (vm.nativeError) {
-          vm.nativeError = false;
-          vm.stackTop -= argCount + 1; // discard args + callee
-          if (!throwException(vm.nativeErrorValue)) return false;
-          return true; // handler installed; caller reloads frame
+          // Leave vm.nativeError set; the run() call site turns it into a
+          // catchable throw (with the correct run baseFrame for unwinding).
+          return false;
         }
-        vm.stackTop -= argCount + 1;
         push(result);
         return true;
       }
@@ -577,11 +615,25 @@ bool callValue(Value callee, int argCount) {
 }
 
 bool vmCallValue(Value callee, int argCount, Value* result) {
+  // Stack level below the callee + its arguments — where a normal call leaves
+  // the stack after its result is popped.
+  Value* savedTop = vm.stackTop - argCount - 1;
   int framesBefore = vm.frameCount;
   if (!callValue(callee, argCount)) return false;
   if (vm.frameCount > framesBefore) {
     InterpretResult r = run(framesBefore);
-    if (r != INTERPRET_OK) return false;
+    if (r == INTERPRET_UNWIND) {
+      // An exception is unwinding toward a handler owned by an outer run().
+      // Reset to the pre-call state so the native that invoked us sees a clean
+      // stack for its own cleanup; the owning run() then lands on the handler
+      // (which restores its own saved stackTop). Without this the abandoned
+      // callback frame + slots would corrupt the native's stack bookkeeping.
+      closeUpvalues(savedTop);
+      vm.stackTop = savedTop;
+      vm.frameCount = framesBefore;
+      return false;
+    }
+    if (r != INTERPRET_OK) return false; // hard error: stack already reset
   }
   *result = pop();
   return true;
@@ -613,6 +665,7 @@ bool callMagicBinary(Value left, ObjString* name,
                      Value right, Value* result) {
   Value method;
   if (!lookupMagicMethod(left, name, &method)) return false;
+  Value* savedTop = vm.stackTop;
   push(left);
   push(right);
   int framesBefore = vm.frameCount;
@@ -623,7 +676,15 @@ bool callMagicBinary(Value left, ObjString* name,
   }
   if (vm.frameCount > framesBefore) {
     InterpretResult r = run(framesBefore);
-    if (r != INTERPRET_OK) return false;
+    if (r == INTERPRET_UNWIND) {
+      // Unwind propagating past this magic call: restore pre-call state so the
+      // magic-op call site (and the handler landing) sees a consistent stack.
+      closeUpvalues(savedTop);
+      vm.stackTop = savedTop;
+      vm.frameCount = framesBefore;
+      return false;
+    }
+    if (r != INTERPRET_OK) return false; // hard error: stack already reset
   }
   *result = pop();
   return true;
@@ -632,6 +693,7 @@ bool callMagicBinary(Value left, ObjString* name,
 bool callMagicUnary(Value operand, ObjString* name, Value* result) {
   Value method;
   if (!lookupMagicMethod(operand, name, &method)) return false;
+  Value* savedTop = vm.stackTop;
   push(operand);
   int framesBefore = vm.frameCount;
   if (!call(AS_CLOSURE(method), 0)) {
@@ -641,7 +703,13 @@ bool callMagicUnary(Value operand, ObjString* name, Value* result) {
   }
   if (vm.frameCount > framesBefore) {
     InterpretResult r = run(framesBefore);
-    if (r != INTERPRET_OK) return false;
+    if (r == INTERPRET_UNWIND) {
+      closeUpvalues(savedTop);
+      vm.stackTop = savedTop;
+      vm.frameCount = framesBefore;
+      return false;
+    }
+    if (r != INTERPRET_OK) return false; // hard error: stack already reset
   }
   *result = pop();
   return true;
@@ -672,10 +740,8 @@ static bool invokeFromClass(ObjClass* klass, ObjString* name, int argCount) {
     if (!native->function(receiver, argCount,
                           vm.stackTop - argCount, &result)) {
       if (vm.nativeError) {
-        vm.nativeError = false;
-        vm.stackTop -= argCount + 1; // discard args + receiver
-        if (!throwException(vm.nativeErrorValue)) return false;
-        return true;
+        // Discard args + receiver; the run() call site throws.
+        vm.stackTop -= argCount + 1;
       }
       return false;
     }
@@ -1233,6 +1299,9 @@ static InterpretResult run(int baseFrame) {
           if (callMagicBinary(a, vm.magicEq, b, &result)) {
             push(BOOL_VAL(!IS_NIL(result) &&
                  !(IS_BOOL(result) && !AS_BOOL(result))));
+          } else if (vm.nativeError || vm.pendingUnwind) {
+            InterpretResult mir = postCallFailure(&frame, baseFrame);
+            if (mir != INTERPRET_OK) return mir;
           } else if (vm.frameCount == 0) {
             return INTERPRET_RUNTIME_ERROR;
           } else {
@@ -1260,6 +1329,9 @@ static InterpretResult run(int baseFrame) {
               return INTERPRET_RUNTIME_ERROR;
             }
             push(BOOL_VAL(AS_DOUBLE_COERCE(result) > 0));
+          } else if (vm.nativeError || vm.pendingUnwind) {
+            InterpretResult mir = postCallFailure(&frame, baseFrame);
+            if (mir != INTERPRET_OK) return mir;
           } else if (vm.frameCount == 0) {
             return INTERPRET_RUNTIME_ERROR;
           } else {
@@ -1288,6 +1360,9 @@ static InterpretResult run(int baseFrame) {
               return INTERPRET_RUNTIME_ERROR;
             }
             push(BOOL_VAL(AS_DOUBLE_COERCE(result) < 0));
+          } else if (vm.nativeError || vm.pendingUnwind) {
+            InterpretResult mir = postCallFailure(&frame, baseFrame);
+            if (mir != INTERPRET_OK) return mir;
           } else if (vm.frameCount == 0) {
             return INTERPRET_RUNTIME_ERROR;
           } else {
@@ -1319,6 +1394,9 @@ static InterpretResult run(int baseFrame) {
           Value result;
           if (callMagicBinary(a, vm.magicAdd, b, &result)) {
             push(result);
+          } else if (vm.nativeError || vm.pendingUnwind) {
+            InterpretResult mir = postCallFailure(&frame, baseFrame);
+            if (mir != INTERPRET_OK) return mir;
           } else if (vm.frameCount == 0) {
             return INTERPRET_RUNTIME_ERROR;
           } else {
@@ -1349,6 +1427,9 @@ static InterpretResult run(int baseFrame) {
           Value result;
           if (callMagicBinary(a, vm.magicSub, b, &result)) {
             push(result);
+          } else if (vm.nativeError || vm.pendingUnwind) {
+            InterpretResult mir = postCallFailure(&frame, baseFrame);
+            if (mir != INTERPRET_OK) return mir;
           } else if (vm.frameCount == 0) {
             return INTERPRET_RUNTIME_ERROR;
           } else {
@@ -1378,6 +1459,9 @@ static InterpretResult run(int baseFrame) {
           Value result;
           if (callMagicBinary(a, vm.magicMul, b, &result)) {
             push(result);
+          } else if (vm.nativeError || vm.pendingUnwind) {
+            InterpretResult mir = postCallFailure(&frame, baseFrame);
+            if (mir != INTERPRET_OK) return mir;
           } else if (vm.frameCount == 0) {
             return INTERPRET_RUNTIME_ERROR;
           } else {
@@ -1410,6 +1494,9 @@ static InterpretResult run(int baseFrame) {
           Value result;
           if (callMagicBinary(a, vm.magicDiv, b, &result)) {
             push(result);
+          } else if (vm.nativeError || vm.pendingUnwind) {
+            InterpretResult mir = postCallFailure(&frame, baseFrame);
+            if (mir != INTERPRET_OK) return mir;
           } else if (vm.frameCount == 0) {
             return INTERPRET_RUNTIME_ERROR;
           } else {
@@ -1438,6 +1525,9 @@ static InterpretResult run(int baseFrame) {
           Value result;
           if (callMagicBinary(a, vm.magicMod, b, &result)) {
             push(result);
+          } else if (vm.nativeError || vm.pendingUnwind) {
+            InterpretResult mir = postCallFailure(&frame, baseFrame);
+            if (mir != INTERPRET_OK) return mir;
           } else if (vm.frameCount == 0) {
             return INTERPRET_RUNTIME_ERROR;
           } else {
@@ -1465,6 +1555,9 @@ static InterpretResult run(int baseFrame) {
           Value result;
           if (callMagicUnary(operand, vm.magicNeg, &result)) {
             push(result);
+          } else if (vm.nativeError || vm.pendingUnwind) {
+            InterpretResult mir = postCallFailure(&frame, baseFrame);
+            if (mir != INTERPRET_OK) return mir;
           } else if (vm.frameCount == 0) {
             return INTERPRET_RUNTIME_ERROR;
           } else {
@@ -1561,7 +1654,8 @@ static InterpretResult run(int baseFrame) {
       case OP_CALL: {
         int argCount = READ_BYTE();
         if (!callValue(peek(argCount), argCount)) {
-          return INTERPRET_RUNTIME_ERROR;
+          InterpretResult ir = postCallFailure(&frame, baseFrame);
+          if (ir != INTERPRET_OK) return ir;
         }
         frame = &vm.frames[vm.frameCount - 1];
         break;
@@ -1570,7 +1664,8 @@ static InterpretResult run(int baseFrame) {
         ObjString* method = READ_STRING();
         int argCount = READ_BYTE();
         if (!invoke(method, argCount)) {
-          return INTERPRET_RUNTIME_ERROR;
+          InterpretResult ir = postCallFailure(&frame, baseFrame);
+          if (ir != INTERPRET_OK) return ir;
         }
         frame = &vm.frames[vm.frameCount - 1];
         break;
@@ -1592,7 +1687,8 @@ static InterpretResult run(int baseFrame) {
           push(argsArr->elements.values[i]);
         }
         if (!callValue(peek(argCount), argCount)) {
-          return INTERPRET_RUNTIME_ERROR;
+          InterpretResult ir = postCallFailure(&frame, baseFrame);
+          if (ir != INTERPRET_OK) return ir;
         }
         frame = &vm.frames[vm.frameCount - 1];
         break;
@@ -1615,7 +1711,8 @@ static InterpretResult run(int baseFrame) {
           push(argsArr->elements.values[i]);
         }
         if (!invoke(method, argCount)) {
-          return INTERPRET_RUNTIME_ERROR;
+          InterpretResult ir = postCallFailure(&frame, baseFrame);
+          if (ir != INTERPRET_OK) return ir;
         }
         frame = &vm.frames[vm.frameCount - 1];
         break;
@@ -1713,7 +1810,8 @@ static InterpretResult run(int baseFrame) {
           if (!throwException(exc)) {
             return INTERPRET_RUNTIME_ERROR;
           }
-          frame = &vm.frames[vm.frameCount - 1];
+          InterpretResult ir = tryLandUnwind(&frame, baseFrame);
+          if (ir != INTERPRET_OK) return ir;
         }
         break;
       }
@@ -1722,7 +1820,8 @@ static InterpretResult run(int baseFrame) {
         int argCount = READ_BYTE();
         ObjClass* superclass = AS_CLASS(pop());
         if (!invokeFromClass(superclass, method, argCount)) {
-          return INTERPRET_RUNTIME_ERROR;
+          InterpretResult ir = postCallFailure(&frame, baseFrame);
+          if (ir != INTERPRET_OK) return ir;
         }
         frame = &vm.frames[vm.frameCount - 1];
         break;
@@ -1886,7 +1985,8 @@ static InterpretResult run(int baseFrame) {
         if (!throwException(value)) {
           return INTERPRET_RUNTIME_ERROR;
         }
-        frame = &vm.frames[vm.frameCount - 1];
+        InterpretResult ir = tryLandUnwind(&frame, baseFrame);
+        if (ir != INTERPRET_OK) return ir;
         break;
       }
       case OP_DEFAULT_ARG: {
@@ -1936,12 +2036,14 @@ static InterpretResult run(int baseFrame) {
         switch (tag) {
           case COMPLETE_NORMAL:
             break;
-          case COMPLETE_EXCEPTION:
+          case COMPLETE_EXCEPTION: {
             if (!throwException(payload)) {
               return INTERPRET_RUNTIME_ERROR;
             }
-            frame = &vm.frames[vm.frameCount - 1];
+            InterpretResult ir = tryLandUnwind(&frame, baseFrame);
+            if (ir != INTERPRET_OK) return ir;
             break;
+          }
           case COMPLETE_RETURN: {
             closeUpvalues(frame->slots);
             vm.frameCount--;
