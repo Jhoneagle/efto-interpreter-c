@@ -123,5 +123,6 @@ bool callMagicBinary(Value left, ObjString* name,
 bool callMagicUnary(Value operand, ObjString* name, Value* result);
 bool callValue(Value callee, int argCount);
 ObjString* stringify(Value value);
+bool isFalsey(Value value);
 
 #endif

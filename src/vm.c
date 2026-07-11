@@ -867,7 +867,7 @@ static void defineMethod(ObjString* name) {
   pop();
 }
 
-static bool isFalsey(Value value) {
+bool isFalsey(Value value) {
   return IS_NIL(value) || (IS_BOOL(value) && !AS_BOOL(value));
 }
 

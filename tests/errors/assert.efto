@@ -1,0 +1,46 @@
+// assert() builtin + catchable AssertionError (Commit 3).
+import { AssertionError, Error } from error;
+
+// Passing assertions are silent and return nil.
+assert(true);
+assert(1 < 2);
+assert(2 + 2 == 4, "arithmetic");
+
+// Truthiness follows the language: only nil/false are falsey, so these pass.
+assert(0);
+assert("");
+print "passed"; // expect: passed
+
+// A failing assert raises a catchable AssertionError with a default message.
+try {
+  assert(false);
+  print "unreachable";
+} catch (AssertionError e) {
+  print "caught";         // expect: caught
+  print e.message;        // expect: assertion failed
+  print e is AssertionError; // expect: true
+  print e is Error;       // expect: true
+}
+
+// A custom string message is used verbatim.
+try {
+  assert(1 == 2, "one is not two");
+} catch (AssertionError e) {
+  print e.message; // expect: one is not two
+}
+
+// A non-string message is stringified.
+try {
+  assert(nil, 42);
+} catch (AssertionError e) {
+  print e.message; // expect: 42
+}
+
+// AssertionError participates in untyped catch too.
+try {
+  assert(false, "boom");
+} catch (e) {
+  print e.message; // expect: boom
+}
+
+print "done"; // expect: done

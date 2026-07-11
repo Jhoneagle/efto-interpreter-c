@@ -1346,6 +1346,25 @@ static Value toStringNative(int argCount, Value* args) {
   return OBJ_VAL(stringify(args[0]));
 }
 
+static Value assertNative(int argCount, Value* args) {
+  if (argCount < 1) {
+    runtimeError("assert() expects at least 1 argument.");
+    return NIL_VAL;
+  }
+  if (isFalsey(args[0])) {
+    if (argCount >= 2) {
+      // A non-string message is rendered via stringify. raiseError copies
+      // the text before allocating, so passing msg->chars is GC-safe.
+      ObjString* msg = IS_STRING(args[1]) ? AS_STRING(args[1])
+                                          : stringify(args[1]);
+      raiseError(vm.assertionErrorClass, "%s", msg->chars);
+    } else {
+      raiseError(vm.assertionErrorClass, "assertion failed");
+    }
+  }
+  return NIL_VAL;
+}
+
 static Value toIntNative(int argCount, Value* args) {
   if (argCount != 1) {
     runtimeError("toInt() expects 1 argument.");
@@ -3056,6 +3075,7 @@ void registerBuiltins(void) {
   defineNativeMethod(vm.stringMethods, "trimEnd", stringTrimEnd, 0);
 
   defineNative("type", typeNative);
+  defineNative("assert", assertNative);
   defineNative("TypeDescriptor", typeDescriptorNative);
   defineNative("Array", arrayConstructorNative);
   defineNative("Map", mapConstructorNative);

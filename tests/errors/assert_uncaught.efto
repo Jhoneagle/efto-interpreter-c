@@ -1,0 +1,3 @@
+// An uncaught failing assert prints "AssertionError: <message>" and exits 70.
+assert(1 == 2, "values differ");
+// expect runtime error: AssertionError: values differ
