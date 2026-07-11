@@ -133,7 +133,70 @@ void runtimeError(const char* format, ...) {
 // Returns false only when there is no handler at all (uncaught): in that case
 // it prints the error and resets the stack. Otherwise it sets vm.pendingUnwind
 // and returns true; the caller must then attempt to land (tryLandUnwind).
+// True if `value` is an instance of Error or one of its subclasses.
+static bool isErrorInstance(Value value) {
+  if (!IS_INSTANCE(value)) return false;
+  ObjClass* klass = AS_INSTANCE(value)->klass;
+  while (klass != NULL) {
+    if (klass == vm.errorClass) return true;
+    klass = klass->superclass;
+  }
+  return false;
+}
+
+// Stamp `.line` (source line of the throw site) and `.stack` (a text traceback)
+// onto an Error instance as it is thrown. No-op for non-Error values, and it
+// never overwrites an already-stamped error, so a rethrow preserves the
+// original throw site. Frames must still be intact (called before unwinding).
+static void annotateError(Value value) {
+  if (!isErrorInstance(value)) return;
+  ObjInstance* inst = AS_INSTANCE(value);
+
+  push(value); // GC-protect the instance across the allocations below
+  ObjString* lineKey = copyString("line", 4);
+  push(OBJ_VAL(lineKey));
+
+  Value existing;
+  if (tableGet(&inst->fields, lineKey, &existing)) {
+    pop(); // lineKey
+    pop(); // value
+    return; // already stamped — preserve the original site (rethrow)
+  }
+
+  // Line of the topmost (throwing) frame; build the traceback top-to-bottom.
+  int line = 0;
+  char buffer[1024];
+  int off = 0;
+  for (int i = vm.frameCount - 1; i >= 0; i--) {
+    CallFrame* f = &vm.frames[i];
+    ObjFunction* fn = f->closure->function;
+    size_t idx = (f->ip > fn->chunk.code)
+                     ? (size_t)(f->ip - fn->chunk.code - 1) : 0;
+    int ln = fn->chunk.lines[idx];
+    if (i == vm.frameCount - 1) line = ln;
+    const char* name = fn->name != NULL ? fn->name->chars : "script";
+    int n = snprintf(buffer + off, sizeof(buffer) - off,
+                     "[line %d] in %s\n", ln, name);
+    if (n < 0 || off + n >= (int)sizeof(buffer)) break;
+    off += n;
+  }
+
+  ObjString* stackStr = copyString(buffer, off);
+  push(OBJ_VAL(stackStr));
+  tableSet(&inst->fields, lineKey, INT_VAL((int64_t)line));
+  ObjString* stackKey = copyString("stack", 5);
+  push(OBJ_VAL(stackKey));
+  tableSet(&inst->fields, stackKey, OBJ_VAL(stackStr));
+
+  pop(); // stackKey
+  pop(); // stackStr
+  pop(); // lineKey
+  pop(); // value
+}
+
 static bool throwException(Value value) {
+  annotateError(value);
+
   if (vm.exceptionHandlerCount == 0) {
     // No handler anywhere — print as runtime error (frames still intact).
     if (IS_STRING(value)) {

@@ -1,0 +1,55 @@
+// Error .line / .stack on thrown errors (Commit 15).
+import { Error, ValueError, IOError } from error;
+import io;
+
+// .line is the source line of the throw statement.
+fun boom() {
+  throw ValueError("bad");
+}
+try {
+  boom();
+} catch (ValueError e) {
+  print e.line; // expect: 7
+}
+
+// .stack lists the active functions, innermost first.
+try {
+  boom();
+} catch (e) {
+  print e.stack.indexOf("boom") >= 0;   // expect: true
+  print e.stack.indexOf("script") >= 0; // expect: true
+}
+
+// Nested calls: .line points at the innermost throw.
+fun inner() {
+  throw Error("deep");
+}
+fun outer() {
+  inner();
+}
+try {
+  outer();
+} catch (e) {
+  print e.line; // expect: 25
+}
+
+// Rethrow preserves the original throw site (not the rethrow line).
+fun rethrower() {
+  try {
+    boom();
+  } catch (e) {
+    throw e;
+  }
+}
+try {
+  rethrower();
+} catch (e) {
+  print e.line; // expect: 7
+}
+
+// Native-raised errors also carry the call-site line.
+try {
+  io.readFile("tests/errors/_no_such_file_line.txt");
+} catch (IOError e) {
+  print e.line; // expect: 52
+}
