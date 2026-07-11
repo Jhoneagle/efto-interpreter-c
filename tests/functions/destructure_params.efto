@@ -1,0 +1,57 @@
+// Destructuring in function parameters.
+
+// Array pattern parameter.
+fun addPair([a, b]) {
+  return a + b;
+}
+print addPair([3, 4]); // expect: 7
+
+// Map pattern parameter.
+fun greet({name, age}) {
+  return "${name} is ${age}";
+}
+print greet({"name": "Alice", "age": 30}); // expect: Alice is 30
+
+// Map pattern with rename.
+fun coord({x: px, y: py}) {
+  return px * 100 + py;
+}
+print coord({"x": 2, "y": 5}); // expect: 205
+
+// Skipped array slots in a parameter.
+fun middle([, b, ]) {
+  return b;
+}
+print middle([1, 2, 3]); // expect: 2
+
+// A destructured param mixed with normal params, in any position.
+fun label(prefix, [a, b], suffix) {
+  return "${prefix}${a}${b}${suffix}";
+}
+print label("<", [1, 2], ">"); // expect: <12>
+
+// Two destructured params (array and map).
+fun combine([a, b], {k}) {
+  return a + b + k;
+}
+print combine([10, 20], {"k": 5}); // expect: 35
+
+// Arrow function with a destructured parameter.
+var arrowSum = ([a, b]) => a + b;
+print arrowSum([8, 9]); // expect: 17
+
+// A destructured param followed by a default param.
+fun withDefault([a, b], c = 100) {
+  return a + b + c;
+}
+print withDefault([1, 2]);     // expect: 103
+print withDefault([1, 2], 10); // expect: 13
+
+// The pattern names are ordinary locals inside the body.
+fun swap([a, b]) {
+  var tmp = a;
+  a = b;
+  b = tmp;
+  return [a, b];
+}
+print swap([1, 2]); // expect: [2, 1]

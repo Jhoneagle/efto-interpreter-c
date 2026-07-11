@@ -159,6 +159,17 @@ uint8_t compoundOp(TokenType type);
 void parseParameterList(void);
 void compileFunction(FunctionType type);
 
+/* Destructuring pattern helpers (defined in compiler.c). The parse helpers
+ * consume tokens only (no bytecode); the emit helpers bind each pattern name as
+ * a new local, extracting from a value held in local slot `srcSlot`. Shared by
+ * var/const destructuring, function parameters, and for-each. */
+int parseArrayPatternNames(Token* names, bool* skip, int maxVars);
+int parseMapPatternNames(Token* keys, Token* varNames, int maxVars);
+void emitArrayPatternBindings(int srcSlot, Token* names, bool* skip, int count,
+                              bool isConst);
+void emitMapPatternBindings(int srcSlot, Token* keys, Token* varNames, int count,
+                            bool isConst);
+
 /* Functions defined in compiler_stmt.c, used by compiler.c */
 void declaration(void);
 void statement(void);

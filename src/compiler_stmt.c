@@ -83,35 +83,11 @@ static void funDeclaration() {
 }
 
 static void arrayDestructure(bool isConst) {
-  advance(); // consume '['
-
   Token names[MAX_DESTRUCTURE_VARS];
   bool skip[MAX_DESTRUCTURE_VARS];
-  int count = 0;
+  int count = parseArrayPatternNames(names, skip, MAX_DESTRUCTURE_VARS);
+  if (count == 0) return;
 
-  if (!check(TOKEN_RIGHT_BRACKET)) {
-    do {
-      if (count >= MAX_DESTRUCTURE_VARS) {
-        error("Too many variables in destructuring pattern.");
-        return;
-      }
-      if (check(TOKEN_COMMA) || check(TOKEN_RIGHT_BRACKET)) {
-        skip[count] = true;
-        names[count] = syntheticToken("");
-      } else {
-        consume(TOKEN_IDENTIFIER, "Expect variable name.");
-        skip[count] = false;
-        names[count] = parser.previous;
-      }
-      count++;
-    } while (match(TOKEN_COMMA));
-  }
-
-  consume(TOKEN_RIGHT_BRACKET, "Expect ']' after destructuring pattern.");
-  if (count == 0) {
-    error("Expect at least one variable in destructuring pattern.");
-    return;
-  }
   consume(TOKEN_EQUAL, "Destructuring requires an initializer.");
   expression();
   consume(TOKEN_SEMICOLON, "Expect ';' after variable declaration.");
@@ -122,16 +98,7 @@ static void arrayDestructure(bool isConst) {
     addLocal(syntheticToken(""));
     markInitialized();
     int hiddenSlot = current->localCount - 1;
-
-    for (int i = 0; i < count; i++) {
-      if (skip[i]) continue;
-      emitBytes(OP_GET_LOCAL, (uint8_t)hiddenSlot);
-      emitConstant(INT_VAL(i));
-      emitByte(OP_INDEX_GET);
-      declareVariableByName(&names[i]);
-      markInitialized();
-      if (isConst) current->locals[current->localCount - 1].isConst = true;
-    }
+    emitArrayPatternBindings(hiddenSlot, names, skip, count, isConst);
   } else {
     // Global scope: DUP-based approach.
     // Find last non-skipped index.
@@ -159,31 +126,11 @@ static void arrayDestructure(bool isConst) {
 }
 
 static void mapDestructure(bool isConst) {
-  advance(); // consume '{'
+  Token keys[MAX_DESTRUCTURE_VARS];
+  Token varNames[MAX_DESTRUCTURE_VARS];
+  int count = parseMapPatternNames(keys, varNames, MAX_DESTRUCTURE_VARS);
+  if (count == 0) return;
 
-  Token keys[256];
-  Token varNames[256];
-  int count = 0;
-
-  if (!check(TOKEN_RIGHT_BRACE)) {
-    do {
-      consume(TOKEN_IDENTIFIER, "Expect property name.");
-      keys[count] = parser.previous;
-      varNames[count] = parser.previous;
-
-      if (match(TOKEN_COLON)) {
-        consume(TOKEN_IDENTIFIER, "Expect variable name after ':'.");
-        varNames[count] = parser.previous;
-      }
-      count++;
-    } while (match(TOKEN_COMMA));
-  }
-
-  consume(TOKEN_RIGHT_BRACE, "Expect '}' after destructuring pattern.");
-  if (count == 0) {
-    error("Expect at least one variable in destructuring pattern.");
-    return;
-  }
   consume(TOKEN_EQUAL, "Destructuring requires an initializer.");
   expression();
   consume(TOKEN_SEMICOLON, "Expect ';' after variable declaration.");
@@ -194,15 +141,7 @@ static void mapDestructure(bool isConst) {
     addLocal(syntheticToken(""));
     markInitialized();
     int hiddenSlot = current->localCount - 1;
-
-    for (int i = 0; i < count; i++) {
-      emitBytes(OP_GET_LOCAL, (uint8_t)hiddenSlot);
-      emitConstant(OBJ_VAL(copyString(keys[i].start, keys[i].length)));
-      emitByte(OP_INDEX_GET);
-      declareVariableByName(&varNames[i]);
-      markInitialized();
-      if (isConst) current->locals[current->localCount - 1].isConst = true;
-    }
+    emitMapPatternBindings(hiddenSlot, keys, varNames, count, isConst);
   } else {
     for (int i = 0; i < count; i++) {
       if (i < count - 1) {
@@ -332,10 +271,14 @@ static void whileStatement() {
   currentLoop = loop.enclosing;
 }
 
-static void forEachStatement() {
+// patternKind: 0 = single name (bind `single`); 1 = array pattern;
+// 2 = map pattern. For patterns, the per-iteration value is bound to a hidden
+// local and then destructured into the pattern names. Caller has consumed
+// 'for', '(', 'var', the target (name or pattern), and 'in'.
+static void forEachStatement(int patternKind, Token single, Token* names,
+                             bool* skip, Token* keys, Token* vnames,
+                             int patCount) {
   // for (var item in collection) { body }
-  // Caller already consumed 'for', '(', 'var', <identifier>, 'in'.
-  // parser.previous is set to the iterator variable name.
   //
   // Compiled as:
   //   iter = collection.__iter__()
@@ -348,7 +291,6 @@ static void forEachStatement() {
   //   exitLoop:
 
   beginScope();
-  Token iteratorName = parser.previous;
 
   // Compile the collection expression.
   expression();
@@ -416,15 +358,28 @@ static void forEachStatement() {
   loop.continueCount = 0;
   currentLoop = &loop;
 
-  // Inner scope for the user's variable.
+  // Inner scope for the user's variable(s).
   beginScope();
-  addLocal(iteratorName);
-  markInitialized();
+  if (patternKind == 0) {
+    addLocal(single);
+    markInitialized();
+  } else {
+    // The iterated value is on the stack; bind it to a hidden local, then
+    // destructure it into the pattern names within this per-iteration scope.
+    addLocal(syntheticToken(""));
+    markInitialized();
+    int srcSlot = current->localCount - 1;
+    if (patternKind == 1) {
+      emitArrayPatternBindings(srcSlot, names, skip, patCount, false);
+    } else {
+      emitMapPatternBindings(srcSlot, keys, vnames, patCount, false);
+    }
+  }
 
   // Compile the body.
   statement();
 
-  endScope(); // Pops user's variable.
+  endScope(); // Pops user's variable(s).
 
   // Patch continue jumps to here (before loop back).
   for (int i = 0; i < loop.continueCount; i++) {
@@ -450,17 +405,48 @@ static void forStatement() {
 
   // Check for for-each: for (var <name> in <expr>)
   if (match(TOKEN_VAR)) {
+    // Destructuring target: for (var [a, b] in expr) / for (var {x, y} in expr).
+    // Also handles the regular-for form for (var [a,b] = expr; ...).
+    if (check(TOKEN_LEFT_BRACKET) || check(TOKEN_LEFT_BRACE)) {
+      bool isMap = check(TOKEN_LEFT_BRACE);
+      Token names[MAX_DESTRUCTURE_VARS];
+      bool skip[MAX_DESTRUCTURE_VARS];
+      Token keys[MAX_DESTRUCTURE_VARS];
+      Token vnames[MAX_DESTRUCTURE_VARS];
+      int count = isMap
+                      ? parseMapPatternNames(keys, vnames, MAX_DESTRUCTURE_VARS)
+                      : parseArrayPatternNames(names, skip, MAX_DESTRUCTURE_VARS);
+
+      if (match(TOKEN_IN)) {
+        forEachStatement(isMap ? 2 : 1, syntheticToken(""), names, skip, keys,
+                         vnames, count);
+        return;
+      }
+
+      // Regular for-loop with a destructuring initializer.
+      beginScope();
+      consume(TOKEN_EQUAL, "Destructuring requires an initializer.");
+      expression();
+      consume(TOKEN_SEMICOLON, "Expect ';' after variable declaration.");
+      addLocal(syntheticToken(""));
+      markInitialized();
+      int slot = current->localCount - 1;
+      if (isMap) {
+        emitMapPatternBindings(slot, keys, vnames, count, false);
+      } else {
+        emitArrayPatternBindings(slot, names, skip, count, false);
+      }
+      goto forBody;
+    }
+
     if (check(TOKEN_IDENTIFIER) && parser.current.type == TOKEN_IDENTIFIER) {
       // Save the identifier token, consume it.
       advance();
       Token name = parser.previous;
 
       if (match(TOKEN_IN)) {
-        // It's a for-each. parser.previous was the identifier.
-        // Temporarily set parser.previous to the name so
-        // forEachStatement can use it.
-        parser.previous = name;
-        forEachStatement();
+        // It's a for-each with a single loop variable.
+        forEachStatement(0, name, NULL, NULL, NULL, NULL, 0);
         return;
       }
 

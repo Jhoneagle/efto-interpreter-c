@@ -1,0 +1,5 @@
+// Nested destructuring patterns in parameters are not supported (one level only).
+fun bad([[a, b], c]) {
+  return a;
+}
+// expect error: Expect variable name.

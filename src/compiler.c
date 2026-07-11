@@ -1069,8 +1069,105 @@ void block() {
   consume(TOKEN_RIGHT_BRACE, "Expect '}' after block.");
 }
 
+int parseArrayPatternNames(Token* names, bool* skip, int maxVars) {
+  advance(); // consume '['
+
+  int count = 0;
+  if (!check(TOKEN_RIGHT_BRACKET)) {
+    do {
+      if (count >= maxVars) {
+        error("Too many variables in destructuring pattern.");
+        return count;
+      }
+      if (check(TOKEN_COMMA) || check(TOKEN_RIGHT_BRACKET)) {
+        skip[count] = true;
+        names[count] = syntheticToken("");
+      } else {
+        consume(TOKEN_IDENTIFIER, "Expect variable name.");
+        skip[count] = false;
+        names[count] = parser.previous;
+      }
+      count++;
+    } while (match(TOKEN_COMMA));
+  }
+
+  consume(TOKEN_RIGHT_BRACKET, "Expect ']' after destructuring pattern.");
+  if (count == 0) {
+    error("Expect at least one variable in destructuring pattern.");
+  }
+  return count;
+}
+
+int parseMapPatternNames(Token* keys, Token* varNames, int maxVars) {
+  advance(); // consume '{'
+
+  int count = 0;
+  if (!check(TOKEN_RIGHT_BRACE)) {
+    do {
+      if (count >= maxVars) {
+        error("Too many variables in destructuring pattern.");
+        return count;
+      }
+      consume(TOKEN_IDENTIFIER, "Expect property name.");
+      keys[count] = parser.previous;
+      varNames[count] = parser.previous;
+
+      if (match(TOKEN_COLON)) {
+        consume(TOKEN_IDENTIFIER, "Expect variable name after ':'.");
+        varNames[count] = parser.previous;
+      }
+      count++;
+    } while (match(TOKEN_COMMA));
+  }
+
+  consume(TOKEN_RIGHT_BRACE, "Expect '}' after destructuring pattern.");
+  if (count == 0) {
+    error("Expect at least one variable in destructuring pattern.");
+  }
+  return count;
+}
+
+void emitArrayPatternBindings(int srcSlot, Token* names, bool* skip, int count,
+                              bool isConst) {
+  for (int i = 0; i < count; i++) {
+    if (skip[i]) continue;
+    emitBytes(OP_GET_LOCAL, (uint8_t)srcSlot);
+    emitConstant(INT_VAL(i));
+    emitByte(OP_INDEX_GET);
+    declareVariableByName(&names[i]);
+    markInitialized();
+    if (isConst) current->locals[current->localCount - 1].isConst = true;
+  }
+}
+
+void emitMapPatternBindings(int srcSlot, Token* keys, Token* varNames, int count,
+                            bool isConst) {
+  for (int i = 0; i < count; i++) {
+    emitBytes(OP_GET_LOCAL, (uint8_t)srcSlot);
+    emitConstant(OBJ_VAL(copyString(keys[i].start, keys[i].length)));
+    emitByte(OP_INDEX_GET);
+    declareVariableByName(&varNames[i]);
+    markInitialized();
+    if (isConst) current->locals[current->localCount - 1].isConst = true;
+  }
+}
+
 void parseParameterList() {
   bool hasDefault = false;
+  // Destructured parameters ([a,b] / {x,y}) bind a synthetic param local that
+  // receives the passed argument; the extraction into pattern names is deferred
+  // until after every param slot is declared, so it never interleaves with the
+  // positional slots the caller fills. Flat arrays hold every pattern's vars.
+  Token dNames[MAX_DESTRUCTURE_VARS];
+  bool dSkip[MAX_DESTRUCTURE_VARS];
+  Token dKeys[MAX_DESTRUCTURE_VARS];
+  Token dVarNames[MAX_DESTRUCTURE_VARS];
+  int dPatIsMap[MAX_DESTRUCTURE_VARS];
+  int dPatSlot[MAX_DESTRUCTURE_VARS];
+  int dPatStart[MAX_DESTRUCTURE_VARS];
+  int dPatLen[MAX_DESTRUCTURE_VARS];
+  int patternCount = 0;
+  int varTotal = 0;
   if (!check(TOKEN_RIGHT_PAREN)) {
     do {
       // Rest parameter: ...name
@@ -1084,6 +1181,39 @@ void parseParameterList() {
         defineVariable(constant);
         // Rest must be last parameter.
         break;
+      }
+
+      // Destructured parameter: [a, b] or {x, y}. The passed argument lands in
+      // a synthetic param local; extraction is deferred (see below).
+      if (check(TOKEN_LEFT_BRACKET) || check(TOKEN_LEFT_BRACE)) {
+        if (hasDefault) {
+          error("Non-default parameter after default parameter.");
+        }
+        current->function->arity++;
+        if (current->function->arity > 255) {
+          errorAtCurrent("Can't have more than 255 parameters.");
+        }
+        addLocal(syntheticToken(""));
+        markInitialized();
+        bool isMap = check(TOKEN_LEFT_BRACE);
+        int start = varTotal;
+        int remaining = MAX_DESTRUCTURE_VARS - start;
+        int n;
+        if (isMap) {
+          n = parseMapPatternNames(&dKeys[start], &dVarNames[start], remaining);
+        } else {
+          n = parseArrayPatternNames(&dNames[start], &dSkip[start], remaining);
+        }
+        dPatIsMap[patternCount] = isMap;
+        dPatSlot[patternCount] = current->localCount - 1;
+        dPatStart[patternCount] = start;
+        dPatLen[patternCount] = n;
+        patternCount++;
+        varTotal += n;
+        if (check(TOKEN_EQUAL)) {
+          error("Destructured parameter can't have a default value.");
+        }
+        continue;
       }
 
       current->function->arity++;
@@ -1127,6 +1257,20 @@ void parseParameterList() {
     }
   } else if (!hasDefault) {
     current->function->minArity = current->function->arity;
+  }
+
+  // Now that every parameter (and the rest param) owns its slot, extract each
+  // destructured param's bindings. Declaring them here places the extraction
+  // locals after all param slots, so they never collide with positional args.
+  for (int p = 0; p < patternCount; p++) {
+    int start = dPatStart[p];
+    if (dPatIsMap[p]) {
+      emitMapPatternBindings(dPatSlot[p], &dKeys[start], &dVarNames[start],
+                             dPatLen[p], false);
+    } else {
+      emitArrayPatternBindings(dPatSlot[p], &dNames[start], &dSkip[start],
+                               dPatLen[p], false);
+    }
   }
 }
 

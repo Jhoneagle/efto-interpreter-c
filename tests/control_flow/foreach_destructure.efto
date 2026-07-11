@@ -1,0 +1,70 @@
+// Destructuring in for-each loops.
+import collections;
+
+// Array destructuring over an array of pairs.
+for (var [a, b] in [[1, 2], [3, 4], [5, 6]]) {
+  print a + b;
+}
+// expect: 3
+// expect: 7
+// expect: 11
+
+// enumerate() yields [index, value] pairs.
+for (var [i, v] in collections.enumerate(["a", "b", "c"])) {
+  print "${i}:${v}";
+}
+// expect: 0:a
+// expect: 1:b
+// expect: 2:c
+
+// zip() two arrays.
+for (var [x, y] in collections.zip([1, 2, 3], [10, 20, 30])) {
+  print x * y;
+}
+// expect: 10
+// expect: 40
+// expect: 90
+
+// Map destructuring over an array of maps.
+for (var {name, score} in [{"name": "A", "score": 1}, {"name": "B", "score": 2}]) {
+  print "${name}=${score}";
+}
+// expect: A=1
+// expect: B=2
+
+// Map destructuring with rename.
+for (var {name: who} in [{"name": "X"}, {"name": "Y"}]) {
+  print who;
+}
+// expect: X
+// expect: Y
+
+// Skipped slot in a for-each pattern.
+for (var [, second] in [[10, 11], [20, 21]]) {
+  print second;
+}
+// expect: 11
+// expect: 21
+
+// break / continue interact correctly with destructuring bindings.
+for (var [a, b] in [[1, 1], [2, 2], [3, 3]]) {
+  if (a == 2) continue;
+  if (a == 3) break;
+  print a + b;
+}
+// expect: 2
+
+// Per-iteration bindings do not accumulate or leak.
+var total = 0;
+for (var [k, val] in collections.enumerate([100, 200, 300])) {
+  total = total + val;
+}
+print total; // expect: 600
+
+// Nested for-each with destructuring on both loops.
+for (var [a, b] in [[1, 2]]) {
+  for (var [c, d] in [[10, 20]]) {
+    print a + b + c + d;
+  }
+}
+// expect: 33
