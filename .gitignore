@@ -116,6 +116,10 @@ conaninfo.txt
 conanfile.txt
 conanfile.py
 
+# Local-only working docs / plans (not source of truth)
+docs/
+build.bat
+
 # Others
 *.log
 *.swp
