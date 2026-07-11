@@ -34,4 +34,9 @@ void regexFree(CompiledRegex* compiled);
 // Get number of capture groups.
 int regexGroupCount(CompiledRegex* compiled);
 
+// Name of capture group `index` (from `(?<name>...)`), or NULL if the group is
+// unnamed or the index is out of range. The returned pointer is owned by the
+// compiled regex.
+const char* regexGroupName(CompiledRegex* compiled, int index);
+
 #endif

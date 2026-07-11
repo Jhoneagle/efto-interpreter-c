@@ -3660,6 +3660,30 @@ static Value regexCompileNative(int argCount, Value* args) {
   return OBJ_VAL(regex);
 }
 
+// Add a "named" sub-map (group name -> captured text, or nil for unmatched
+// optional groups) to a match-result map. `map` must already be reachable
+// (pushed by the caller). Always adds the key, even with no named groups.
+static void addNamedGroups(ObjMap* map, ObjRegex* re, RegexResult* r,
+                           const char* text) {
+  ObjMap* named = newMap();
+  push(OBJ_VAL(named));
+  for (int g = 0; g < r->groupCount; g++) {
+    const char* nm = regexGroupName(re->compiled, g);
+    if (nm == NULL) continue;
+    Value key = OBJ_VAL(copyString(nm, (int)strlen(nm)));
+    Value val;
+    if (r->groupStart[g] >= 0 && r->groupEnd[g] >= 0) {
+      val = OBJ_VAL(copyString(text + r->groupStart[g],
+                               r->groupEnd[g] - r->groupStart[g]));
+    } else {
+      val = NIL_VAL;
+    }
+    mapSetGuarded(named, key, val);
+  }
+  mapSetGuarded(map, OBJ_VAL(copyString("named", 5)), OBJ_VAL(named));
+  pop(); // named
+}
+
 static bool regexTestNative(Value receiver, int argCount, Value* args,
                             Value* result) {
   ObjRegex* re = AS_REGEX(receiver);
@@ -3708,6 +3732,7 @@ static bool regexMatchNative(Value receiver, int argCount, Value* args,
   }
   mapSetGuarded(map, OBJ_VAL(copyString("groups", 6)), OBJ_VAL(groups));
   pop(); // groups
+  addNamedGroups(map, re, &r, text);
   pop(); // map
   *result = OBJ_VAL(map);
   return true;
@@ -3753,6 +3778,7 @@ static bool regexMatchAllNative(Value receiver, int argCount, Value* args,
     }
     mapSetGuarded(map, OBJ_VAL(copyString("groups", 6)), OBJ_VAL(groups));
     pop(); // groups
+    addNamedGroups(map, re, &r, text);
 
     // results is still on the stack under map; append map (guarded) then drop it.
     arrayAppendGuarded(results, OBJ_VAL(map));
@@ -3767,6 +3793,74 @@ static bool regexMatchAllNative(Value receiver, int argCount, Value* args,
   return true;
 }
 
+// --- Replacement-template expansion ($0, $1.., $<name>, $$) ---
+// A plain malloc/realloc string builder (no GC allocation, so it never
+// triggers a collection mid-build; the finished text is copied out via
+// copyString and the buffer freed).
+typedef struct { char* buf; int len; int cap; } StrBuilder;
+
+static void sbAppend(StrBuilder* sb, const char* s, int n) {
+  if (n <= 0) return;
+  if (sb->len + n + 1 > sb->cap) {
+    int ncap = sb->cap < 16 ? 16 : sb->cap;
+    while (sb->len + n + 1 > ncap) ncap *= 2;
+    sb->buf = (char*)realloc(sb->buf, ncap);
+    sb->cap = ncap;
+  }
+  memcpy(sb->buf + sb->len, s, n);
+  sb->len += n;
+}
+
+static void sbAppendChar(StrBuilder* sb, char c) { sbAppend(sb, &c, 1); }
+
+// Append `group gi`'s captured span (empty if unmatched / out of range).
+static void sbAppendGroup(StrBuilder* sb, RegexResult* r, const char* text,
+                          int gi) {
+  if (gi >= 0 && gi < r->groupCount &&
+      r->groupStart[gi] >= 0 && r->groupEnd[gi] >= 0) {
+    sbAppend(sb, text + r->groupStart[gi], r->groupEnd[gi] - r->groupStart[gi]);
+  }
+}
+
+// Expand one match's replacement template into `sb`. Recognizes $0 (whole
+// match), $N (1-based numbered group), $<name> (named group), $$ (literal $).
+// Unknown / unmatched references expand to the empty string.
+static void expandReplacement(StrBuilder* sb, const char* rep, int repLen,
+                              ObjRegex* re, RegexResult* r, const char* text) {
+  for (int i = 0; i < repLen; i++) {
+    if (rep[i] != '$') { sbAppendChar(sb, rep[i]); continue; }
+    if (i + 1 >= repLen) { sbAppendChar(sb, '$'); break; }
+    char next = rep[i + 1];
+    if (next == '$') { sbAppendChar(sb, '$'); i++; }
+    else if (next == '0') {
+      sbAppend(sb, text + r->matchStart, r->matchEnd - r->matchStart);
+      i++;
+    } else if (next >= '1' && next <= '9') {
+      int j = i + 1, num = 0;
+      while (j < repLen && rep[j] >= '0' && rep[j] <= '9') {
+        num = num * 10 + (rep[j] - '0');
+        j++;
+      }
+      sbAppendGroup(sb, r, text, num - 1); // $N is 1-based
+      i = j - 1;
+    } else if (next == '<') {
+      int nameStart = i + 2, j = nameStart;
+      while (j < repLen && rep[j] != '>') j++;
+      if (j >= repLen) { sbAppendChar(sb, '$'); continue; } // no '>': literal $
+      int nameLen = j - nameStart, gi = -1;
+      for (int g = 0; g < r->groupCount; g++) {
+        const char* nm = regexGroupName(re->compiled, g);
+        if (nm != NULL && (int)strlen(nm) == nameLen &&
+            memcmp(nm, rep + nameStart, nameLen) == 0) { gi = g; break; }
+      }
+      sbAppendGroup(sb, r, text, gi);
+      i = j; // consume through '>'
+    } else {
+      sbAppendChar(sb, '$'); // lone '$' before an ordinary char
+    }
+  }
+}
+
 static bool regexReplaceNative(Value receiver, int argCount, Value* args,
                                Value* result) {
   ObjRegex* re = AS_REGEX(receiver);
@@ -3775,26 +3869,64 @@ static bool regexReplaceNative(Value receiver, int argCount, Value* args,
     return false;
   }
   const char* text = AS_CSTRING(args[0]);
-  const char* replacement = AS_CSTRING(args[1]);
-  int repLen = (int)strlen(replacement);
+  const char* rep = AS_CSTRING(args[1]);
+  int repLen = (int)strlen(rep);
+  int textLen = (int)strlen(text);
 
+  // First match only (see replaceAll for global replacement).
   RegexResult r = regexExec(re->compiled, text, 0);
   if (!r.matched) {
-    *result = OBJ_VAL(copyString(text, (int)strlen(text)));
+    *result = OBJ_VAL(copyString(text, textLen));
     return true;
   }
 
-  int prefixLen = r.matchStart;
-  int suffixLen = (int)strlen(text) - r.matchEnd;
-  int totalLen = prefixLen + repLen + suffixLen;
+  StrBuilder sb = { NULL, 0, 0 };
+  sbAppend(&sb, text, r.matchStart);                    // prefix
+  expandReplacement(&sb, rep, repLen, re, &r, text);    // replacement
+  sbAppend(&sb, text + r.matchEnd, textLen - r.matchEnd); // suffix
 
-  char* buf = (char*)malloc(totalLen + 1);
-  memcpy(buf, text, prefixLen);
-  memcpy(buf + prefixLen, replacement, repLen);
-  memcpy(buf + prefixLen + repLen, text + r.matchEnd, suffixLen);
-  buf[totalLen] = '\0';
+  *result = OBJ_VAL(copyString(sb.buf ? sb.buf : "", sb.len));
+  free(sb.buf);
+  return true;
+}
 
-  *result = OBJ_VAL(takeString(buf, totalLen));
+static bool regexReplaceAllNative(Value receiver, int argCount, Value* args,
+                                  Value* result) {
+  ObjRegex* re = AS_REGEX(receiver);
+  if (argCount < 2 || !IS_STRING(args[0]) || !IS_STRING(args[1])) {
+    runtimeError("regex.replaceAll() expects two strings.");
+    return false;
+  }
+  const char* text = AS_CSTRING(args[0]);
+  const char* rep = AS_CSTRING(args[1]);
+  int repLen = (int)strlen(rep);
+  int textLen = (int)strlen(text);
+
+  StrBuilder sb = { NULL, 0, 0 };
+  int pos = 0, copiedUpTo = 0;
+  while (pos <= textLen) {
+    RegexResult r = regexExec(re->compiled, text, pos);
+    if (!r.matched) break;
+
+    sbAppend(&sb, text + copiedUpTo, r.matchStart - copiedUpTo); // gap
+    expandReplacement(&sb, rep, repLen, re, &r, text);
+    copiedUpTo = r.matchEnd;
+
+    if (r.matchEnd > r.matchStart) {
+      pos = r.matchEnd;
+    } else {
+      // Zero-width match: copy the char we step over so it isn't dropped.
+      if (r.matchEnd < textLen) {
+        sbAppendChar(&sb, text[r.matchEnd]);
+        copiedUpTo = r.matchEnd + 1;
+      }
+      pos = r.matchEnd + 1;
+    }
+  }
+  sbAppend(&sb, text + copiedUpTo, textLen - copiedUpTo); // tail
+
+  *result = OBJ_VAL(copyString(sb.buf ? sb.buf : "", sb.len));
+  free(sb.buf);
   return true;
 }
 
@@ -4462,6 +4594,7 @@ void registerBuiltins(void) {
   defineNativeMethod(vm.regexMethods, "find", regexMatchNative, 1);
   defineNativeMethod(vm.regexMethods, "findAll", regexMatchAllNative, 1);
   defineNativeMethod(vm.regexMethods, "replace", regexReplaceNative, 2);
+  defineNativeMethod(vm.regexMethods, "replaceAll", regexReplaceAllNative, 2);
   defineNativeMethod(vm.regexMethods, "split", regexSplitNative, 1);
 
   srand((unsigned int)time(NULL));

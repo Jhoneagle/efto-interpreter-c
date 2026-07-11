@@ -1,0 +1,31 @@
+import regex;
+
+// $1, $2 numbered backreferences (1-based).
+var swap = regex.compile("(\\w+)@(\\w+)");
+print swap.replace("user@host", "$2.$1"); // expect: host.user
+
+// $0 is the whole match.
+print regex.compile("\\d+").replace("x42y", "[$0]"); // expect: x[42]y
+
+// $$ is a literal dollar sign.
+print regex.compile("\\d+").replace("a5", "$$$0"); // expect: a$5
+
+// Named backreference $<name>.
+var d = regex.compile("(?<h>\\d+):(?<m>\\d+)");
+print d.replace("at 09:30", "$<m> past $<h>"); // expect: at 30 past 09
+
+// Unknown / unmatched backref -> empty string.
+print regex.compile("(\\d+)").replace("n7", "[$9]"); // expect: n[]
+
+// replace() only touches the first match.
+print regex.compile("a").replace("banana", "-"); // expect: b-nana
+
+// replaceAll() replaces every match.
+print regex.compile("a").replaceAll("banana", "-");       // expect: b-n-n-
+print regex.compile("(\\d)").replaceAll("1-2-3", "[$1]"); // expect: [1]-[2]-[3]
+
+// replaceAll() with no match returns the original.
+print regex.compile("z").replaceAll("banana", "-"); // expect: banana
+
+// Zero-width matches neither drop characters nor loop forever.
+print regex.compile("x*").replaceAll("abc", "-"); // expect: -a-b-c-

@@ -1,0 +1,39 @@
+import regex;
+
+// Named capture groups appear in a "named" sub-map on the match result.
+var r = regex.compile("(?<year>\\d+)-(?<month>\\d+)");
+var m = r.find("date: 2024-01");
+print m["match"];          // expect: 2024-01
+print m["named"]["year"];  // expect: 2024
+print m["named"]["month"]; // expect: 01
+
+// Numbered groups still work alongside names.
+print m["groups"][0];      // expect: 2024
+print m["groups"][1];      // expect: 01
+
+// Mixed named and unnamed groups.
+var mix = regex.compile("(?<y>\\d+)-(\\d+)").find("2024-01");
+print mix["named"]["y"];    // expect: 2024
+print mix["named"].size;    // expect: 1
+print mix["groups"].length; // expect: 2
+print mix["groups"][1];     // expect: 01
+
+// A pattern with no named groups yields an empty "named" map.
+var plain = regex.compile("(\\d+)").find("42");
+print plain["named"].size;  // expect: 0
+
+// An unmatched optional named group yields nil.
+var opt = regex.compile("(?<a>x)?(?<b>y)").find("y");
+print opt["named"]["a"];    // expect: nil
+print opt["named"]["b"];    // expect: y
+
+// findAll surfaces names for every match.
+var all = regex.compile("(?<ch>[aeiou])").findAll("hello");
+print all.length;            // expect: 2
+print all[0]["named"]["ch"]; // expect: e
+print all[1]["named"]["ch"]; // expect: o
+
+// A non-capturing group is not named and does not appear.
+var nc = regex.compile("(?:ab)(?<tail>c)").find("abc");
+print nc["named"]["tail"];   // expect: c
+print nc["named"].size;      // expect: 1

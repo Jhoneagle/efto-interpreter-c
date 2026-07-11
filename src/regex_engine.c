@@ -62,6 +62,7 @@ typedef struct {
   int len;
   int flags;
   int groupCount;
+  char* groupNames[MAX_REGEX_GROUPS]; // NULL for unnamed groups
   char error[256];
   bool hasError;
 } RegexParser;
@@ -155,19 +156,42 @@ static RegexNode* parseAtom(RegexParser* p) {
   if (c == '(') {
     parserAdvance(p);
     bool nc = false;
-    if (parserPeek(p) == '?' && p->pos + 1 < p->len && p->src[p->pos + 1] == ':') {
-      parserAdvance(p); parserAdvance(p); nc = true;
+    char* groupName = NULL; // for (?<name>...)
+    if (parserPeek(p) == '?' && p->pos + 1 < p->len) {
+      char kind = p->src[p->pos + 1];
+      if (kind == ':') {
+        parserAdvance(p); parserAdvance(p); nc = true;
+      } else if (kind == '<') {
+        parserAdvance(p); parserAdvance(p); // consume '?' '<'
+        int nameStart = p->pos;
+        while (parserPeek(p) != '>' && parserPeek(p) != '\0' &&
+               parserPeek(p) != ')') parserAdvance(p);
+        int nameLen = p->pos - nameStart;
+        if (!parserMatch(p, '>')) {
+          parserError(p, "Unterminated group name in '(?<name>'");
+        } else if (nameLen == 0) {
+          parserError(p, "Empty capture group name");
+        } else {
+          groupName = (char*)malloc(nameLen + 1);
+          memcpy(groupName, p->src + nameStart, nameLen);
+          groupName[nameLen] = '\0';
+        }
+      }
     }
     RegexNode* inner = parseAlternation(p);
     if (!parserMatch(p, ')')) { parserError(p, "Unmatched '('"); }
     if (nc) {
+      free(groupName);
       RegexNode* n = newNode(RE_NC_GROUP); n->left = inner; return n;
     } else {
       if (p->groupCount >= MAX_REGEX_GROUPS) {
         parserError(p, "Too many capture groups (max 16)");
+        free(groupName);
         RegexNode* n = newNode(RE_NC_GROUP); n->left = inner; return n;
       }
-      RegexNode* n = newNode(RE_GROUP); n->groupIndex = p->groupCount++; n->left = inner; return n;
+      int gi = p->groupCount++;
+      p->groupNames[gi] = groupName; // NULL if unnamed
+      RegexNode* n = newNode(RE_GROUP); n->groupIndex = gi; n->left = inner; return n;
     }
   }
   if (c == '[') { parserAdvance(p); return parseCharClass(p); }
@@ -217,6 +241,7 @@ struct CompiledRegex {
   RegexNode* ast;
   int groupCount;
   int flags;
+  char* groupNames[MAX_REGEX_GROUPS]; // owned; NULL for unnamed groups
 };
 
 CompiledRegex* regexCompile(const char* pattern, int flags,
@@ -229,17 +254,18 @@ CompiledRegex* regexCompile(const char* pattern, int flags,
   parser.groupCount = 0;
   parser.hasError = false;
   parser.error[0] = '\0';
+  for (int i = 0; i < MAX_REGEX_GROUPS; i++) parser.groupNames[i] = NULL;
 
   RegexNode* ast = parseAlternation(&parser);
 
-  if (parser.hasError) {
-    if (errorBuf) snprintf(errorBuf, errorBufLen, "%s", parser.error);
-    freeNode(ast);
-    return NULL;
-  }
-  if (parser.pos < parser.len) {
-    if (errorBuf) snprintf(errorBuf, errorBufLen,
-                           "Unexpected character at position %d", parser.pos);
+  if (parser.hasError || parser.pos < parser.len) {
+    if (parser.hasError) {
+      if (errorBuf) snprintf(errorBuf, errorBufLen, "%s", parser.error);
+    } else if (errorBuf) {
+      snprintf(errorBuf, errorBufLen,
+               "Unexpected character at position %d", parser.pos);
+    }
+    for (int i = 0; i < MAX_REGEX_GROUPS; i++) free(parser.groupNames[i]);
     freeNode(ast);
     return NULL;
   }
@@ -248,17 +274,26 @@ CompiledRegex* regexCompile(const char* pattern, int flags,
   compiled->ast = ast;
   compiled->groupCount = parser.groupCount;
   compiled->flags = flags;
+  for (int i = 0; i < MAX_REGEX_GROUPS; i++) {
+    compiled->groupNames[i] = parser.groupNames[i]; // transfer ownership
+  }
   return compiled;
 }
 
 void regexFree(CompiledRegex* compiled) {
   if (!compiled) return;
   freeNode(compiled->ast);
+  for (int i = 0; i < MAX_REGEX_GROUPS; i++) free(compiled->groupNames[i]);
   free(compiled);
 }
 
 int regexGroupCount(CompiledRegex* compiled) {
   return compiled->groupCount;
+}
+
+const char* regexGroupName(CompiledRegex* compiled, int index) {
+  if (index < 0 || index >= MAX_REGEX_GROUPS) return NULL;
+  return compiled->groupNames[index];
 }
 
 /* ---- Recursive backtracking matcher ---- */
