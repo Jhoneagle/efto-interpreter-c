@@ -1,0 +1,67 @@
+// string module: codepoints, multi-encoding encode/decode, binary I/O.
+// Assertions print only ASCII (ints/bools/lengths) so stdout stays portable;
+// the non-ASCII literals below are UTF-8 in the source file.
+import string;
+import io;
+
+// --- codepoints ---
+print string.ord("A");                 // expect: 65
+print string.chr(97) == "a";           // expect: true
+print string.fromCodePoint(233) == string.chr(233); // expect: true
+
+// "héllo": 'é' (U+00E9) is 2 UTF-8 bytes, so byte length 6 but 5 codepoints.
+print "héllo".length;                  // expect: 6
+print string.codePointCount("héllo");  // expect: 5
+print string.codePointAt("héllo", 0);  // expect: 104
+print string.codePointAt("héllo", 1);  // expect: 233
+
+// chr of a 2-byte codepoint yields a 2-byte string.
+print string.chr(233).length;          // expect: 2
+
+// --- join / split (delegate to array/string impls) ---
+print string.join(["a", "b", "c"], "-"); // expect: a-b-c
+var parts = string.split("a,b,c", ",");
+print parts.length; // expect: 3
+print parts[1];     // expect: b
+
+// --- encode / decode round-trips ---
+var s = "Aé😀"; // ASCII + 2-byte + 4-byte (astral) codepoints
+print string.decode(string.encode(s)) == s;                         // expect: true
+print string.decode(string.encode(s, "utf-8"), "utf-8") == s;       // expect: true
+print string.decode(string.encode(s, "utf-16le"), "utf-16le") == s; // expect: true
+print string.decode(string.encode(s, "utf-16be"), "utf-16be") == s; // expect: true
+print string.decode(string.encode(s, "utf-32le"), "utf-32le") == s; // expect: true
+print string.decode(string.encode(s, "utf-32be"), "utf-32be") == s; // expect: true
+
+// Empty string round-trips.
+print string.encode("").length;        // expect: 0
+print string.decode(Bytes(), "utf-8") == ""; // expect: true
+
+// --- Latin-1 exact byte values ---
+var lat = string.encode("Aÿ", "latin1"); // 'ÿ' is U+00FF
+print lat.length; // expect: 2
+print lat[0];     // expect: 65
+print lat[1];     // expect: 255
+print string.decode(lat, "iso-8859-1") == "Aÿ"; // expect: true
+
+// --- UTF-16 surrogate pair (astral codepoint) ---
+var u16 = string.encode("😀", "utf-16le");
+print u16.length; // expect: 4
+
+// --- binary file I/O round-trip ---
+var data = Bytes([0, 1, 2, 255, 254, 128]);
+io.writeFileBytes("tests/strings/_test_tmp_bin", data);
+var back = io.readFileBytes("tests/strings/_test_tmp_bin");
+print back == data;   // expect: true
+print back.length;    // expect: 6
+io.deleteFile("tests/strings/_test_tmp_bin");
+
+// file handle binary mode.
+var f = io.open("tests/strings/_test_tmp_bin2", "wb");
+f.writeBytes(Bytes([9, 8, 7]));
+f.close();
+var g = io.open("tests/strings/_test_tmp_bin2", "rb");
+var rb = g.readBytes();
+g.close();
+print rb == Bytes([9, 8, 7]); // expect: true
+io.deleteFile("tests/strings/_test_tmp_bin2");

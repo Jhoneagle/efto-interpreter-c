@@ -19,6 +19,7 @@
 #include "builtins.h"
 #include "regex_engine.h"
 #include "json.h"
+#include "encoding.h"
 #include "common.h"
 #include "memory.h"
 #include "object.h"
@@ -2857,6 +2858,48 @@ static bool fileWrite(Value receiver, int argCount, Value* args,
   return true;
 }
 
+static bool fileReadBytes(Value receiver, int argCount, Value* args,
+                          Value* result) {
+  ObjFile* file = AS_FILE(receiver);
+  if (!file->isOpen) {
+    runtimeError("Cannot read from a closed file.");
+    return false;
+  }
+
+  long current = ftell(file->file);
+  fseek(file->file, 0L, SEEK_END);
+  long end = ftell(file->file);
+  fseek(file->file, current, SEEK_SET);
+
+  size_t remaining = (size_t)(end - current);
+  uint8_t* buffer = (uint8_t*)malloc(remaining > 0 ? remaining : 1);
+  size_t bytesRead = fread(buffer, 1, remaining, file->file);
+  ObjBytes* bytes = newBytes(buffer, (int)bytesRead);
+  free(buffer);
+  *result = OBJ_VAL(bytes);
+  return true;
+}
+
+static bool fileWriteBytes(Value receiver, int argCount, Value* args,
+                           Value* result) {
+  ObjFile* file = AS_FILE(receiver);
+  if (!file->isOpen) {
+    runtimeError("Cannot write to a closed file.");
+    return false;
+  }
+  if (!IS_BYTES(args[0])) {
+    runtimeError("writeBytes() expects a bytes argument.");
+    return false;
+  }
+  ObjBytes* bytes = AS_BYTES(args[0]);
+  if (bytes->length > 0) {
+    fwrite(bytes->bytes, 1, bytes->length, file->file);
+  }
+  fflush(file->file);
+  *result = NIL_VAL;
+  return true;
+}
+
 static bool fileClose(Value receiver, int argCount, Value* args,
                       Value* result) {
   ObjFile* file = AS_FILE(receiver);
@@ -2986,10 +3029,12 @@ static Value ioOpenNative(int argCount, Value* args) {
   ObjString* path = AS_STRING(args[0]);
   ObjString* mode = AS_STRING(args[1]);
 
-  // Validate mode.
+  // Validate mode (text r/w/a and binary rb/wb/ab).
   const char* m = mode->chars;
-  if (strcmp(m, "r") != 0 && strcmp(m, "w") != 0 && strcmp(m, "a") != 0) {
-    runtimeError("open() mode must be \"r\", \"w\", or \"a\".");
+  if (strcmp(m, "r") != 0 && strcmp(m, "w") != 0 && strcmp(m, "a") != 0 &&
+      strcmp(m, "rb") != 0 && strcmp(m, "wb") != 0 && strcmp(m, "ab") != 0) {
+    runtimeError(
+        "open() mode must be \"r\", \"w\", \"a\", \"rb\", \"wb\", or \"ab\".");
     return NIL_VAL;
   }
 
@@ -3006,6 +3051,53 @@ static Value ioOpenNative(int argCount, Value* args) {
   pop(); // mode
   pop(); // path
   return OBJ_VAL(objFile);
+}
+
+static Value ioReadFileBytesNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("readFileBytes() expects a string path argument.");
+    return NIL_VAL;
+  }
+
+  FILE* file = fopen(AS_CSTRING(args[0]), "rb");
+  if (file == NULL) {
+    raiseError(vm.ioErrorClass, "Could not read file '%s'.",
+               AS_CSTRING(args[0]));
+    return NIL_VAL;
+  }
+
+  fseek(file, 0L, SEEK_END);
+  long size = ftell(file);
+  rewind(file);
+
+  uint8_t* buffer = (uint8_t*)malloc(size > 0 ? (size_t)size : 1);
+  size_t bytesRead = fread(buffer, 1, (size_t)size, file);
+  fclose(file);
+
+  ObjBytes* bytes = newBytes(buffer, (int)bytesRead);
+  free(buffer);
+  return OBJ_VAL(bytes);
+}
+
+static Value ioWriteFileBytesNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_STRING(args[0]) || !IS_BYTES(args[1])) {
+    runtimeError("writeFileBytes() expects (path, bytes) arguments.");
+    return NIL_VAL;
+  }
+
+  FILE* file = fopen(AS_CSTRING(args[0]), "wb");
+  if (file == NULL) {
+    raiseError(vm.ioErrorClass, "Could not write file '%s'.",
+               AS_CSTRING(args[0]));
+    return NIL_VAL;
+  }
+
+  ObjBytes* bytes = AS_BYTES(args[1]);
+  if (bytes->length > 0) {
+    fwrite(bytes->bytes, 1, bytes->length, file);
+  }
+  fclose(file);
+  return NIL_VAL;
 }
 
 // --- Error module ---
@@ -3650,6 +3742,163 @@ static Value bytesFromHexNative(int argCount, Value* args) {
   return OBJ_VAL(out);
 }
 
+// --- string module (codepoints, encodings, join/split) ---
+
+static Value stringOrdNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("ord() expects a string argument.");
+    return NIL_VAL;
+  }
+  ObjString* s = AS_STRING(args[0]);
+  if (s->length == 0) {
+    raiseError(vm.valueErrorClass, "ord(): empty string.");
+    return NIL_VAL;
+  }
+  uint32_t cp;
+  if (utf8DecodeAt((const uint8_t*)s->chars, s->length, 0, &cp) == 0) {
+    raiseError(vm.valueErrorClass, "ord(): invalid UTF-8.");
+    return NIL_VAL;
+  }
+  return INT_VAL((int64_t)cp);
+}
+
+static Value stringChrNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_INT(args[0])) {
+    runtimeError("chr() expects an integer codepoint argument.");
+    return NIL_VAL;
+  }
+  int64_t cp = AS_INT(args[0]);
+  uint8_t tmp[4];
+  int k = (cp < 0 || cp > 0x10FFFF) ? 0 : utf8Encode((uint32_t)cp, tmp);
+  if (k == 0) {
+    raiseError(vm.valueErrorClass,
+               "chr(): %lld is not a valid codepoint.", (long long)cp);
+    return NIL_VAL;
+  }
+  return OBJ_VAL(copyString((const char*)tmp, k));
+}
+
+static Value stringCodePointAtNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_STRING(args[0]) || !IS_INT(args[1])) {
+    runtimeError("codePointAt() expects (string, byteIndex) arguments.");
+    return NIL_VAL;
+  }
+  ObjString* s = AS_STRING(args[0]);
+  int idx = (int)AS_INT(args[1]);
+  if (idx < 0 || idx >= s->length) {
+    raiseError(vm.rangeErrorClass,
+               "codePointAt(): index %d out of bounds [0, %d).",
+               idx, s->length);
+    return NIL_VAL;
+  }
+  uint32_t cp;
+  if (utf8DecodeAt((const uint8_t*)s->chars, s->length, idx, &cp) == 0) {
+    raiseError(vm.valueErrorClass,
+               "codePointAt(): invalid UTF-8 at index %d.", idx);
+    return NIL_VAL;
+  }
+  return INT_VAL((int64_t)cp);
+}
+
+static Value stringCodePointCountNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("codePointCount() expects a string argument.");
+    return NIL_VAL;
+  }
+  ObjString* s = AS_STRING(args[0]);
+  int count = 0, i = 0;
+  while (i < s->length) {
+    uint32_t cp;
+    int sz = utf8DecodeAt((const uint8_t*)s->chars, s->length, i, &cp);
+    if (sz == 0) {
+      raiseError(vm.valueErrorClass, "codePointCount(): invalid UTF-8.");
+      return NIL_VAL;
+    }
+    i += sz;
+    count++;
+  }
+  return INT_VAL((int64_t)count);
+}
+
+static Encoding resolveEncodingArg(int argCount, Value* args, int idx,
+                                   const char* who) {
+  if (argCount <= idx) return ENC_UTF8;  // default
+  if (!IS_STRING(args[idx])) {
+    runtimeError("%s encoding must be a string.", who);
+    return ENC_UNKNOWN;  // caller sees runtimeError already fired
+  }
+  ObjString* name = AS_STRING(args[idx]);
+  Encoding enc = encodingFromName(name->chars, name->length);
+  if (enc == ENC_UNKNOWN) {
+    raiseError(vm.valueErrorClass, "%s unknown encoding '%s'.",
+               who, name->chars);
+  }
+  return enc;
+}
+
+static Value stringEncodeNative(int argCount, Value* args) {
+  if (argCount < 1 || !IS_STRING(args[0])) {
+    runtimeError("encode() expects a string argument.");
+    return NIL_VAL;
+  }
+  Encoding enc = resolveEncodingArg(argCount, args, 1, "encode():");
+  if (enc == ENC_UNKNOWN) return NIL_VAL;  // error already raised/reported
+
+  ObjString* s = AS_STRING(args[0]);
+  int outLen;
+  const char* err = NULL;
+  uint8_t* buf = encodeFromUtf8((const uint8_t*)s->chars, s->length, enc,
+                                &outLen, &err);
+  if (buf == NULL) {
+    raiseError(vm.valueErrorClass, "encode(): %s.", err);
+    return NIL_VAL;
+  }
+  ObjBytes* out = newBytes(buf, outLen);
+  free(buf);
+  return OBJ_VAL(out);
+}
+
+static Value stringDecodeNative(int argCount, Value* args) {
+  if (argCount < 1 || !IS_BYTES(args[0])) {
+    runtimeError("decode() expects a bytes argument.");
+    return NIL_VAL;
+  }
+  Encoding enc = resolveEncodingArg(argCount, args, 1, "decode():");
+  if (enc == ENC_UNKNOWN) return NIL_VAL;
+
+  ObjBytes* b = AS_BYTES(args[0]);
+  int outLen;
+  const char* err = NULL;
+  uint8_t* buf = decodeToUtf8(b->bytes, b->length, enc, &outLen, &err);
+  if (buf == NULL) {
+    raiseError(vm.valueErrorClass, "decode(): %s.", err);
+    return NIL_VAL;
+  }
+  ObjString* out = copyString((const char*)buf, outLen);
+  free(buf);
+  return OBJ_VAL(out);
+}
+
+static Value stringJoinNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_ARRAY(args[0]) || !IS_STRING(args[1])) {
+    runtimeError("join() expects (array, separator string) arguments.");
+    return NIL_VAL;
+  }
+  Value result;
+  if (!arrayJoin(args[0], 1, &args[1], &result)) return NIL_VAL;
+  return result;
+}
+
+static Value stringSplitNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_STRING(args[0]) || !IS_STRING(args[1])) {
+    runtimeError("split() expects (string, separator string) arguments.");
+    return NIL_VAL;
+  }
+  Value result;
+  if (!stringSplit(args[0], 1, &args[1], &result)) return NIL_VAL;
+  return result;
+}
+
 void registerBuiltins(void) {
   vm.arrayMethods = NULL;
   vm.arrayMethods = newClass(copyString("Array", 5));
@@ -3716,6 +3965,8 @@ void registerBuiltins(void) {
   defineNativeMethod(vm.fileMethods, "read", fileRead, 0);
   defineNativeMethod(vm.fileMethods, "readLine", fileReadLine, 0);
   defineNativeMethod(vm.fileMethods, "write", fileWrite, 1);
+  defineNativeMethod(vm.fileMethods, "readBytes", fileReadBytes, 0);
+  defineNativeMethod(vm.fileMethods, "writeBytes", fileWriteBytes, 1);
   defineNativeMethod(vm.fileMethods, "close", fileClose, 0);
 
   vm.stringMethods = NULL;
@@ -3827,6 +4078,8 @@ void registerBuiltins(void) {
   defineModuleNative(ioModule, "fileExists", ioFileExistsNative);
   defineModuleNative(ioModule, "deleteFile", ioDeleteFileNative);
   defineModuleNative(ioModule, "open", ioOpenNative);
+  defineModuleNative(ioModule, "readFileBytes", ioReadFileBytesNative);
+  defineModuleNative(ioModule, "writeFileBytes", ioWriteFileBytesNative);
 
   // Built-in 'os' module.
   ObjModule* osModule = registerBuiltinModule("os");
@@ -3900,6 +4153,18 @@ void registerBuiltins(void) {
   ObjModule* jsonModule = registerBuiltinModule("json");
   defineModuleNative(jsonModule, "stringify", jsonStringifyNative);
   defineModuleNative(jsonModule, "parse", jsonParseNative);
+
+  // --- string module (codepoints, encodings, join/split) ---
+  ObjModule* stringModule = registerBuiltinModule("string");
+  defineModuleNative(stringModule, "ord", stringOrdNative);
+  defineModuleNative(stringModule, "chr", stringChrNative);
+  defineModuleNative(stringModule, "fromCodePoint", stringChrNative);
+  defineModuleNative(stringModule, "codePointAt", stringCodePointAtNative);
+  defineModuleNative(stringModule, "codePointCount", stringCodePointCountNative);
+  defineModuleNative(stringModule, "join", stringJoinNative);
+  defineModuleNative(stringModule, "split", stringSplitNative);
+  defineModuleNative(stringModule, "encode", stringEncodeNative);
+  defineModuleNative(stringModule, "decode", stringDecodeNative);
 
   // --- regex module ---
   ObjModule* regexModule = registerBuiltinModule("regex");

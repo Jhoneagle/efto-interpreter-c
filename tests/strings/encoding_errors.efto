@@ -1,0 +1,42 @@
+// string encode/decode errors are catchable ValueError instances.
+import string;
+import { ValueError, RangeError, Error } from error;
+
+// Encoding a codepoint outside the target range.
+try {
+  string.encode("é", "ascii");
+  print "unreachable";
+} catch (ValueError e) {
+  print "ascii-range";   // expect: ascii-range
+  print e is ValueError; // expect: true
+  print e is Error;      // expect: true
+}
+try { string.encode("😀", "latin1"); }
+catch (ValueError e) { print "latin1-range"; } // expect: latin1-range
+
+// Unknown encoding names.
+try { string.encode("x", "bogus"); }
+catch (ValueError e) { print "enc-unknown"; } // expect: enc-unknown
+try { string.decode(Bytes([1]), "nope"); }
+catch (ValueError e) { print "dec-unknown"; } // expect: dec-unknown
+
+// Malformed byte input for decode.
+try { string.decode(Bytes([195]), "utf-8"); }     // truncated 2-byte seq (0xC3)
+catch (ValueError e) { print "bad-utf8"; }        // expect: bad-utf8
+try { string.decode(Bytes([1, 2, 3]), "utf-16le"); } // odd length
+catch (ValueError e) { print "utf16-odd"; }       // expect: utf16-odd
+try { string.decode(Bytes([200]), "ascii"); }     // >0x7F
+catch (ValueError e) { print "ascii-byte"; }       // expect: ascii-byte
+
+// Invalid codepoint for chr.
+try { string.chr(-1); }        catch (ValueError e) { print "chr-neg"; }  // expect: chr-neg
+try { string.chr(1114112); }   catch (ValueError e) { print "chr-high"; } // expect: chr-high
+
+// codePointAt out of range.
+try { string.codePointAt("hi", 5); }
+catch (RangeError e) { print "cpa-oob"; } // expect: cpa-oob
+
+// ord on empty string.
+try { string.ord(""); } catch (ValueError e) { print "ord-empty"; } // expect: ord-empty
+
+print "after"; // expect: after
