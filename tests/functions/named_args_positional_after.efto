@@ -1,0 +1,6 @@
+// A positional argument may not follow a named argument.
+fun f(a, b) {
+  return a + b;
+}
+print f(a: 1, 2);
+// expect error: Positional argument cannot follow a named argument.

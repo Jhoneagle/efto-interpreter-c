@@ -706,13 +706,32 @@ static void ternary(bool canAssign) {
 
 #define ARG_SPREAD_SENTINEL 255
 
-static uint8_t argumentList() {
+// True if the upcoming tokens form a named argument `identifier :`. Uses a
+// two-token lookahead (parser.current is the identifier; peek the one after).
+static bool checkNamedArg() {
+  if (!check(TOKEN_IDENTIFIER)) return false;
+  ScannerState saved = saveScannerState();
+  Token next = scanToken();
+  restoreScannerState(saved);
+  return next.type == TOKEN_COLON;
+}
+
+// Compiles a call's argument list. Positional args are emitted first; if
+// `allowNamed` is set, trailing `name: value` pairs are emitted as
+// (nameConstant, value) and *namedCount receives their count. Returns the
+// positional count, or ARG_SPREAD_SENTINEL when the call spreads an array.
+static uint8_t argumentList(int* namedCount, bool allowNamed) {
   uint8_t argCount = 0;
+  int named = 0;
   bool hasSpread = false;
+  bool sawNamed = false;
 
   if (!check(TOKEN_RIGHT_PAREN)) {
     do {
       if (check(TOKEN_DOT_DOT_DOT)) {
+        if (sawNamed) {
+          error("Spread argument cannot follow a named argument.");
+        }
         if (!hasSpread) {
           // Package args so far into an array.
           emitBytes(OP_BUILD_ARRAY, argCount);
@@ -722,7 +741,27 @@ static uint8_t argumentList() {
         advance(); // consume ...
         expression();
         emitByte(OP_SPREAD_ARRAY);
+      } else if (checkNamedArg()) {
+        if (!allowNamed) {
+          error("Named arguments are only supported on direct function calls.");
+        }
+        if (hasSpread) {
+          error("Named argument cannot be combined with a spread argument.");
+        }
+        advance(); // consume the name identifier
+        Token nameTok = parser.previous;
+        consume(TOKEN_COLON, "Expect ':' after argument name.");
+        emitConstant(OBJ_VAL(copyString(nameTok.start, nameTok.length)));
+        expression();
+        if (named == 254) {
+          error("Can't have more than 254 named arguments.");
+        }
+        named++;
+        sawNamed = true;
       } else {
+        if (sawNamed) {
+          error("Positional argument cannot follow a named argument.");
+        }
         expression();
         if (hasSpread) {
           emitByte(OP_ARRAY_APPEND);
@@ -738,6 +777,7 @@ static uint8_t argumentList() {
 
   consume(TOKEN_RIGHT_PAREN, "Expect ')' after arguments.");
 
+  *namedCount = named;
   if (hasSpread) {
     return ARG_SPREAD_SENTINEL;
   }
@@ -760,7 +800,8 @@ static void dot(bool canAssign) {
     emitByte(compoundOp(opType));
     emitBytes(OP_SET_PROPERTY, name);
   } else if (match(TOKEN_LEFT_PAREN)) {
-    uint8_t argCount = argumentList();
+    int namedCount = 0;
+    uint8_t argCount = argumentList(&namedCount, false);
     if (argCount == ARG_SPREAD_SENTINEL) {
       emitBytes(OP_INVOKE_SPREAD, name);
     } else {
@@ -786,7 +827,8 @@ static void super_(bool canAssign) {
   namedVariable(syntheticToken("this"), false);
 
   if (match(TOKEN_LEFT_PAREN)) {
-    uint8_t argCount = argumentList();
+    int namedCount = 0;
+    uint8_t argCount = argumentList(&namedCount, false);
     namedVariable(syntheticToken("super"), false);
     emitBytes(OP_SUPER_INVOKE, name);
     emitByte(argCount);
@@ -797,9 +839,14 @@ static void super_(bool canAssign) {
 }
 
 static void call(bool canAssign) {
-  uint8_t argCount = argumentList();
+  int namedCount = 0;
+  uint8_t argCount = argumentList(&namedCount, true);
   if (argCount == ARG_SPREAD_SENTINEL) {
     emitByte(OP_CALL_SPREAD);
+  } else if (namedCount > 0) {
+    emitByte(OP_CALL_KW);
+    emitByte(argCount);
+    emitByte((uint8_t)namedCount);
   } else {
     emitBytes(OP_CALL, argCount);
   }

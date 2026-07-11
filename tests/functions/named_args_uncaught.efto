@@ -1,0 +1,6 @@
+// An uncaught unknown-keyword error aborts with a TypeError (exit 70).
+fun f(a, b = 1) {
+  return a + b;
+}
+f(1, nope: 2);
+// expect runtime error: TypeError: Unknown keyword argument 'nope'.

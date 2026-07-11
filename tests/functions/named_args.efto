@@ -1,0 +1,74 @@
+// Named / keyword arguments (Commit 10b).
+import { TypeError } from error;
+
+fun make(x, y = 10, z = 20) {
+  return x + y + z;
+}
+
+// Skip a middle default by naming a later parameter.
+print make(1, z: 3);        // expect: 14
+
+// Named arguments may be given in any order.
+print make(1, z: 3, y: 5);  // expect: 9
+print make(x: 1, y: 2, z: 3); // expect: 6
+
+// Name a required parameter; optionals fall back to their defaults.
+print make(x: 100);         // expect: 130
+
+// Mix leading positionals with trailing named arguments.
+fun greet(name, greeting = "Hello", punct = "!") {
+  return "${greeting}, ${name}${punct}";
+}
+print greet("Alice", greeting: "Hey");   // expect: Hey, Alice!
+print greet("Bob", punct: "?");          // expect: Hello, Bob?
+
+// Arrow functions accept named arguments too.
+var add = (a, b = 2) => a + b;
+print add(a: 5);            // expect: 7
+print add(a: 5, b: 10);     // expect: 15
+
+// Unknown keyword -> catchable TypeError.
+try {
+  make(1, w: 99);
+} catch (TypeError e) {
+  print e.message;          // expect: Unknown keyword argument 'w'.
+}
+
+// Duplicate: parameter supplied both positionally and by name.
+try {
+  make(1, x: 2);
+} catch (TypeError e) {
+  print e.message;          // expect: Duplicate argument 'x'.
+}
+
+// Duplicate: same keyword twice.
+try {
+  make(x: 1, x: 2);
+} catch (TypeError e) {
+  print e.message;          // expect: Duplicate argument 'x'.
+}
+
+// Missing a required argument.
+try {
+  make(y: 5);
+} catch (TypeError e) {
+  print e.message;          // expect: Missing required argument 'x'.
+}
+
+// Keyword arguments are rejected on native functions (no param names).
+try {
+  assert(cond: true);
+} catch (TypeError e) {
+  print e.message; // expect: Keyword arguments require a function with named parameters.
+}
+
+// Keyword call on a class initializer.
+class Point {
+  init(x, y = 0) {
+    this.x = x;
+    this.y = y;
+  }
+}
+var p = Point(y: 7, x: 3);
+print p.x; // expect: 3
+print p.y; // expect: 7

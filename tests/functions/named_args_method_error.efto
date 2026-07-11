@@ -1,0 +1,8 @@
+// Named arguments are only supported on direct function calls, not on method
+// invocations (compile-time error).
+class C {
+  m(a, b) { return a + b; }
+}
+var c = C();
+print c.m(a: 1, b: 2);
+// expect error: Named arguments are only supported on direct function calls.

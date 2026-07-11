@@ -621,6 +621,97 @@ bool callValue(Value callee, int argCount) {
   return false;
 }
 
+// Return the ObjFunction underlying a keyword-callable value, or NULL if the
+// callee cannot accept keyword arguments (native, or a class without a
+// user-defined init).
+static ObjFunction* keywordCalleeFunction(Value callee) {
+  if (IS_CLOSURE(callee)) return AS_CLOSURE(callee)->function;
+  if (IS_BOUND_METHOD(callee)) {
+    return AS_BOUND_METHOD(callee)->method->function;
+  }
+  if (IS_CLASS(callee)) {
+    Value init;
+    if (tableGet(&AS_CLASS(callee)->methods, vm.initString, &init) &&
+        IS_CLOSURE(init)) {
+      return AS_CLOSURE(init)->function;
+    }
+  }
+  return NULL;
+}
+
+// Handle OP_CALL_KW. The stack holds, above the callee:
+//   pos_0 .. pos_{P-1}, name_0, val_0, .., name_{K-1}, val_{K-1}
+// We reorder these into a positional frame (arity slots, MISSING where
+// unsupplied), replace the argument region with it, then dispatch through the
+// normal callValue path (which handles receiver/instance placement). Errors are
+// raised catchably via raiseError. Returns false on any failure.
+static bool callKeyword(int posCount, int namedCount) {
+  int total = posCount + 2 * namedCount;
+  Value callee = peek(total);
+
+  ObjFunction* fn = keywordCalleeFunction(callee);
+  if (fn == NULL) {
+    raiseError(vm.typeErrorClass,
+               "Keyword arguments require a function with named parameters.");
+    return false;
+  }
+  if (fn->hasRest) {
+    raiseError(vm.typeErrorClass,
+               "Cannot use keyword arguments with a rest parameter.");
+    return false;
+  }
+
+  int arity = fn->arity;
+  Value* base = vm.stackTop - total; // points at pos_0
+
+  if (posCount > arity) {
+    raiseError(vm.typeErrorClass,
+               "Expected at most %d arguments but got %d positional.", arity,
+               posCount);
+    return false;
+  }
+
+  Value ordered[256];
+  for (int i = 0; i < arity; i++) ordered[i] = MISSING_VAL;
+  for (int i = 0; i < posCount; i++) ordered[i] = base[i];
+
+  for (int j = 0; j < namedCount; j++) {
+    ObjString* name = AS_STRING(base[posCount + 2 * j]);
+    Value value = base[posCount + 2 * j + 1];
+    int idx = -1;
+    for (int p = 0; p < fn->paramCount; p++) {
+      if (fn->paramNames[p] == name) { idx = p; break; } // interned: ptr eq
+    }
+    if (idx < 0) {
+      raiseError(vm.typeErrorClass, "Unknown keyword argument '%s'.",
+                 name->chars);
+      return false;
+    }
+    if (!IS_MISSING(ordered[idx])) {
+      raiseError(vm.typeErrorClass, "Duplicate argument '%s'.", name->chars);
+      return false;
+    }
+    ordered[idx] = value;
+  }
+
+  // Every required parameter (those before the first default) must be filled.
+  for (int i = 0; i < fn->minArity; i++) {
+    if (IS_MISSING(ordered[i])) {
+      const char* nm = (i < fn->paramCount && fn->paramNames[i] != NULL)
+                           ? fn->paramNames[i]->chars
+                           : "(positional)";
+      raiseError(vm.typeErrorClass, "Missing required argument '%s'.", nm);
+      return false;
+    }
+  }
+
+  // Replace [pos + named pairs] with the ordered positional slots, then let the
+  // normal dispatch path bind them. MISSING slots are filled by OP_DEFAULT_ARG.
+  vm.stackTop -= total;
+  for (int i = 0; i < arity; i++) push(ordered[i]);
+  return callValue(peek(arity), arity);
+}
+
 bool vmCallValue(Value callee, int argCount, Value* result) {
   // Stack level below the callee + its arguments — where a normal call leaves
   // the stack after its result is popped.
@@ -1694,6 +1785,16 @@ static InterpretResult run(int baseFrame) {
       case OP_CALL: {
         int argCount = READ_BYTE();
         if (!callValue(peek(argCount), argCount)) {
+          InterpretResult ir = postCallFailure(&frame, baseFrame);
+          if (ir != INTERPRET_OK) return ir;
+        }
+        frame = &vm.frames[vm.frameCount - 1];
+        break;
+      }
+      case OP_CALL_KW: {
+        int posCount = READ_BYTE();
+        int namedCount = READ_BYTE();
+        if (!callKeyword(posCount, namedCount)) {
           InterpretResult ir = postCallFailure(&frame, baseFrame);
           if (ir != INTERPRET_OK) return ir;
         }

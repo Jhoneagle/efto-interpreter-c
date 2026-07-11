@@ -219,6 +219,12 @@ int disassembleInstruction(Chunk* chunk, int offset) {
       return simpleInstruction("OP_RIGHT_SHIFT", offset);
     case OP_MATCH_FAIL:
       return simpleInstruction("OP_MATCH_FAIL", offset);
+    case OP_CALL_KW: {
+      uint8_t posCount = chunk->code[offset + 1];
+      uint8_t namedCount = chunk->code[offset + 2];
+      printf("%-16s pos=%d named=%d\n", "OP_CALL_KW", posCount, namedCount);
+      return offset + 3;
+    }
     default:
       printf("Unknown opcode %d\n", instruction);
       return offset + 1;
