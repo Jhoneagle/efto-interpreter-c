@@ -50,7 +50,15 @@ bool valuesEqual(Value a, Value b) {
   switch (a.type) {
     case VAL_BOOL:   return AS_BOOL(a) == AS_BOOL(b);
     case VAL_NIL:    return true;
-    case VAL_OBJ:    return AS_OBJ(a) == AS_OBJ(b);
+    case VAL_OBJ:
+      // bytes compare by content (they are not interned like strings).
+      if (IS_BYTES(a) && IS_BYTES(b)) {
+        ObjBytes* ba = AS_BYTES(a);
+        ObjBytes* bb = AS_BYTES(b);
+        return ba->length == bb->length &&
+               memcmp(ba->bytes, bb->bytes, ba->length) == 0;
+      }
+      return AS_OBJ(a) == AS_OBJ(b);
     default:         return false;
   }
 }

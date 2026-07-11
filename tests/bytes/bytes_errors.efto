@@ -1,0 +1,33 @@
+// bytes errors are catchable (immutability, bounds, construction range).
+import { TypeError, RangeError, ValueError, Error } from error;
+
+var b = Bytes([10, 20, 30]);
+
+// bytes are immutable: index assignment raises TypeError.
+try {
+  b[0] = 99;
+  print "unreachable";
+} catch (TypeError e) {
+  print "immutable";      // expect: immutable
+  print e is TypeError;   // expect: true
+  print e is Error;       // expect: true
+}
+
+// Out-of-bounds read raises RangeError.
+try { var x = b[5]; }  catch (RangeError e) { print "oob-high"; } // expect: oob-high
+try { var x = b[-1]; } catch (RangeError e) { print "oob-low"; }  // expect: oob-low
+
+// Non-integer index raises TypeError.
+try { var x = b["a"]; } catch (TypeError e) { print "bad-index"; } // expect: bad-index
+
+// Constructing from an out-of-range int raises ValueError.
+try { var z = Bytes([256]); } catch (ValueError e) { print "ctor-range"; } // expect: ctor-range
+
+// Constructing from a non-int element raises TypeError.
+try { var z = Bytes([1, "x"]); } catch (TypeError e) { print "ctor-type"; } // expect: ctor-type
+
+// bytesFromHex rejects odd-length and invalid input.
+try { bytesFromHex("abc"); }  catch (ValueError e) { print "hex-odd"; }  // expect: hex-odd
+try { bytesFromHex("zz"); }   catch (ValueError e) { print "hex-bad"; }  // expect: hex-bad
+
+print "after"; // expect: after

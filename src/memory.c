@@ -85,6 +85,9 @@ static void blackenObject(Obj* object) {
       if (array->elementType) markObject((Obj*)array->elementType);
       break;
     }
+    case OBJ_BYTES:
+      // Immutable raw bytes; no Value children to mark.
+      break;
     case OBJ_BOUND_METHOD: {
       ObjBoundMethod* bound = (ObjBoundMethod*)object;
       markValue(bound->receiver);
@@ -182,6 +185,12 @@ static void freeObject(Obj* object) {
       ObjArray* array = (ObjArray*)object;
       freeValueArray(&array->elements);
       FREE(ObjArray, object);
+      break;
+    }
+    case OBJ_BYTES: {
+      ObjBytes* bytes = (ObjBytes*)object;
+      FREE_ARRAY(uint8_t, bytes->bytes, bytes->length);
+      FREE(ObjBytes, object);
       break;
     }
     case OBJ_BOUND_METHOD:
@@ -314,6 +323,7 @@ static void markRoots() {
   markObject((Obj*)vm.magicIter);
   markObject((Obj*)vm.magicNext);
   markObject((Obj*)vm.arrayMethods);
+  markObject((Obj*)vm.bytesMethods);
   markObject((Obj*)vm.fileMethods);
   markObject((Obj*)vm.iteratorMethods);
   markObject((Obj*)vm.mapMethods);

@@ -28,8 +28,10 @@
 #define IS_NATIVE(value)       isObjType(value, OBJ_NATIVE)
 #define IS_NATIVE_METHOD(value) isObjType(value, OBJ_NATIVE_METHOD)
 #define IS_STRING(value)       isObjType(value, OBJ_STRING)
+#define IS_BYTES(value)        isObjType(value, OBJ_BYTES)
 
 #define AS_ARRAY(value)        ((ObjArray*)AS_OBJ(value))
+#define AS_BYTES(value)        ((ObjBytes*)AS_OBJ(value))
 #define AS_SET(value)          ((ObjSet*)AS_OBJ(value))
 #define AS_TYPE_DESCRIPTOR(value) ((ObjTypeDescriptor*)AS_OBJ(value))
 #define AS_FILE(value)         ((ObjFile*)AS_OBJ(value))
@@ -49,6 +51,7 @@
 
 typedef enum {
   OBJ_ARRAY,
+  OBJ_BYTES,
   OBJ_BOUND_METHOD,
   OBJ_FILE,
   OBJ_ITERATOR,
@@ -96,6 +99,15 @@ typedef struct {
   ValueArray elements;
   ObjTypeDescriptor* elementType;
 } ObjArray;
+
+// Immutable byte buffer. `hash` is a precomputed FNV-1a over the bytes so that
+// two byte objects with equal contents hash the same and work as map/set keys.
+typedef struct {
+  Obj obj;
+  int length;
+  uint8_t* bytes;
+  uint32_t hash;
+} ObjBytes;
 
 typedef struct {
   Obj obj;
@@ -216,6 +228,7 @@ struct ObjTypeDescriptor {
 };
 
 ObjArray* newArray();
+ObjBytes* newBytes(const uint8_t* data, int length);
 ObjSet* newSet();
 ObjFile* newFile(FILE* file, ObjString* path, ObjString* mode);
 ObjIterator* newIterator(Value source);

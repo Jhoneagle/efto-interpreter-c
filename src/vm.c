@@ -223,6 +223,12 @@ ObjString* stringify(Value value) {
     switch (OBJ_TYPE(value)) {
       case OBJ_CLASS:
         return AS_CLASS(value)->name;
+      case OBJ_BYTES: {
+        char buffer[32];
+        int len = snprintf(buffer, sizeof(buffer), "bytes(len=%d)",
+                           AS_BYTES(value)->length);
+        return copyString(buffer, len);
+      }
       case OBJ_FILE:
         return AS_FILE(value)->path;
       case OBJ_MODULE:
@@ -776,6 +782,10 @@ static bool invoke(ObjString* name, int argCount) {
     return invokeFromClass(vm.arrayMethods, name, argCount);
   }
 
+  if (IS_BYTES(receiver)) {
+    return invokeFromClass(vm.bytesMethods, name, argCount);
+  }
+
   if (IS_MAP(receiver)) {
     return invokeFromClass(vm.mapMethods, name, argCount);
   }
@@ -927,6 +937,19 @@ static bool executeGetProperty(ObjString* name) {
     return false;
   }
 
+  if (IS_BYTES(peek(0))) {
+    ObjBytes* bytes = AS_BYTES(peek(0));
+
+    if (name == vm.lengthString) {
+      pop();
+      push(INT_VAL((int64_t)bytes->length));
+      return true;
+    }
+
+    runtimeError("Bytes has no property '%s'.", name->chars);
+    return false;
+  }
+
   if (IS_MAP(peek(0))) {
     ObjMap* map = AS_MAP(peek(0));
 
@@ -993,6 +1016,19 @@ static bool executeIndexGet(void) {
     }
 
     push(array->elements.values[i]);
+  } else if (IS_BYTES(receiver)) {
+    if (!IS_INT(index)) {
+      raiseError(vm.typeErrorClass, "bytes index must be an integer.");
+      return false;
+    }
+    ObjBytes* bytes = AS_BYTES(receiver);
+    int i = (int)AS_INT(index);
+    if (i < 0 || i >= bytes->length) {
+      raiseError(vm.rangeErrorClass, "bytes index %d out of bounds [0, %d).",
+                 i, bytes->length);
+      return false;
+    }
+    push(INT_VAL((int64_t)bytes->bytes[i]));
   } else if (IS_MAP(receiver)) {
     ObjMap* map = AS_MAP(receiver);
     Value value;
@@ -1055,6 +1091,9 @@ static bool executeIndexSet(void) {
       return false;
     }
     valueTableSet(&map->entries, index, value);
+  } else if (IS_BYTES(receiver)) {
+    raiseError(vm.typeErrorClass, "bytes are immutable.");
+    return false;
   } else {
     runtimeError("Only arrays and maps support index assignment.");
     return false;
@@ -1773,6 +1812,12 @@ static InterpretResult run(int baseFrame) {
             nextVal = arr->elements.values[iter->index++];
             hasNext = true;
           }
+        } else if (IS_BYTES(iter->source)) {
+          ObjBytes* bytes = AS_BYTES(iter->source);
+          if (iter->index < bytes->length) {
+            nextVal = INT_VAL((int64_t)bytes->bytes[iter->index++]);
+            hasNext = true;
+          }
         } else if (IS_MAP(iter->source)) {
           ObjMap* map = AS_MAP(iter->source);
           while (iter->index < map->entries.capacity) {
@@ -1878,11 +1923,19 @@ static InterpretResult run(int baseFrame) {
         break;
       }
       case OP_INDEX_GET: {
-        if (!executeIndexGet()) return INTERPRET_RUNTIME_ERROR;
+        // executeIndexGet may raise a catchable error (e.g. bytes bounds via
+        // raiseError) or abort via runtimeError; postCallFailure handles both.
+        if (!executeIndexGet()) {
+          InterpretResult r = postCallFailure(&frame, baseFrame);
+          if (r != INTERPRET_OK) return r;
+        }
         break;
       }
       case OP_INDEX_SET: {
-        if (!executeIndexSet()) return INTERPRET_RUNTIME_ERROR;
+        if (!executeIndexSet()) {
+          InterpretResult r = postCallFailure(&frame, baseFrame);
+          if (r != INTERPRET_OK) return r;
+        }
         break;
       }
       case OP_CLOSURE: {

@@ -1316,6 +1316,7 @@ ObjString* typeOfValue(Value value) {
     switch (OBJ_TYPE(value)) {
       case OBJ_STRING:        return copyString("string", 6);
       case OBJ_ARRAY:         return copyString("array", 5);
+      case OBJ_BYTES:         return copyString("bytes", 5);
       case OBJ_MAP:           return copyString("map", 3);
       case OBJ_SET:           return copyString("set", 3);
       case OBJ_CLASS:         return copyString("class", 5);
@@ -3489,6 +3490,166 @@ static Value iterNative(int argCount, Value* args) {
   return OBJ_VAL(iter);
 }
 
+// --- bytes native methods & constructors ---
+
+static bool bytesSlice(Value receiver, int argCount, Value* args,
+                       Value* result) {
+  if (!IS_INT(args[0]) || !IS_INT(args[1])) {
+    runtimeError("bytes.slice() expects integer start and end.");
+    return false;
+  }
+  ObjBytes* bytes = AS_BYTES(receiver);
+  int len = bytes->length;
+  int start = (int)AS_INT(args[0]);
+  int end = (int)AS_INT(args[1]);
+  // Negative indices count from the end, then clamp to [0, len].
+  if (start < 0) start += len;
+  if (end < 0) end += len;
+  if (start < 0) start = 0;
+  if (start > len) start = len;
+  if (end < 0) end = 0;
+  if (end > len) end = len;
+  if (start > end) start = end;
+
+  push(receiver);  // GC protect source across newBytes
+  ObjBytes* out = newBytes(bytes->bytes + start, end - start);
+  pop();
+  *result = OBJ_VAL(out);
+  return true;
+}
+
+static bool bytesIndexOf(Value receiver, int argCount, Value* args,
+                         Value* result) {
+  if (!IS_INT(args[0])) {
+    runtimeError("bytes.indexOf() expects an integer byte value.");
+    return false;
+  }
+  ObjBytes* bytes = AS_BYTES(receiver);
+  int64_t target = AS_INT(args[0]);
+  if (target >= 0 && target <= 255) {
+    for (int i = 0; i < bytes->length; i++) {
+      if (bytes->bytes[i] == (uint8_t)target) {
+        *result = INT_VAL((int64_t)i);
+        return true;
+      }
+    }
+  }
+  *result = INT_VAL(-1);
+  return true;
+}
+
+static bool bytesToArray(Value receiver, int argCount, Value* args,
+                         Value* result) {
+  ObjBytes* bytes = AS_BYTES(receiver);
+  push(receiver);       // GC protect source
+  ObjArray* arr = newArray();
+  push(OBJ_VAL(arr));   // GC protect array while filling
+  for (int i = 0; i < bytes->length; i++) {
+    writeValueArray(&arr->elements, INT_VAL((int64_t)bytes->bytes[i]));
+  }
+  pop();  // arr
+  pop();  // receiver
+  *result = OBJ_VAL(arr);
+  return true;
+}
+
+static bool bytesHex(Value receiver, int argCount, Value* args,
+                     Value* result) {
+  static const char HEX[] = "0123456789abcdef";
+  ObjBytes* bytes = AS_BYTES(receiver);
+  int n = bytes->length;
+  push(receiver);  // GC protect source across ALLOCATE
+  char* buf = ALLOCATE(char, n * 2 + 1);
+  for (int i = 0; i < n; i++) {
+    buf[i * 2] = HEX[bytes->bytes[i] >> 4];
+    buf[i * 2 + 1] = HEX[bytes->bytes[i] & 0x0F];
+  }
+  buf[n * 2] = '\0';
+  ObjString* s = takeString(buf, n * 2);
+  pop();  // receiver
+  *result = OBJ_VAL(s);
+  return true;
+}
+
+static Value bytesConstructorNative(int argCount, Value* args) {
+  if (argCount == 0) return OBJ_VAL(newBytes(NULL, 0));
+  if (argCount != 1) {
+    runtimeError("Bytes() expects 0 or 1 arguments.");
+    return NIL_VAL;
+  }
+
+  if (IS_STRING(args[0])) {
+    ObjString* s = AS_STRING(args[0]);
+    return OBJ_VAL(newBytes((const uint8_t*)s->chars, s->length));
+  }
+
+  if (IS_ARRAY(args[0])) {
+    ObjArray* arr = AS_ARRAY(args[0]);
+    int n = arr->elements.count;
+    uint8_t* tmp = (uint8_t*)malloc(n > 0 ? n : 1);
+    for (int i = 0; i < n; i++) {
+      Value e = arr->elements.values[i];
+      if (!IS_INT(e)) {
+        free(tmp);
+        raiseError(vm.typeErrorClass,
+                   "Bytes(): array elements must be integers.");
+        return NIL_VAL;
+      }
+      int64_t v = AS_INT(e);
+      if (v < 0 || v > 255) {
+        free(tmp);
+        raiseError(vm.valueErrorClass,
+                   "Bytes(): byte value %lld out of range [0, 255].",
+                   (long long)v);
+        return NIL_VAL;
+      }
+      tmp[i] = (uint8_t)v;
+    }
+    ObjBytes* out = newBytes(tmp, n);
+    free(tmp);
+    return OBJ_VAL(out);
+  }
+
+  raiseError(vm.typeErrorClass,
+             "Bytes() expects a string or an array of integers.");
+  return NIL_VAL;
+}
+
+static int bytesHexDigit(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+static Value bytesFromHexNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("bytesFromHex() expects a string argument.");
+    return NIL_VAL;
+  }
+  ObjString* s = AS_STRING(args[0]);
+  if (s->length % 2 != 0) {
+    raiseError(vm.valueErrorClass,
+               "bytesFromHex(): hex string must have even length.");
+    return NIL_VAL;
+  }
+  int n = s->length / 2;
+  uint8_t* tmp = (uint8_t*)malloc(n > 0 ? n : 1);
+  for (int i = 0; i < n; i++) {
+    int hi = bytesHexDigit(s->chars[i * 2]);
+    int lo = bytesHexDigit(s->chars[i * 2 + 1]);
+    if (hi < 0 || lo < 0) {
+      free(tmp);
+      raiseError(vm.valueErrorClass, "bytesFromHex(): invalid hex digit.");
+      return NIL_VAL;
+    }
+    tmp[i] = (uint8_t)((hi << 4) | lo);
+  }
+  ObjBytes* out = newBytes(tmp, n);
+  free(tmp);
+  return OBJ_VAL(out);
+}
+
 void registerBuiltins(void) {
   vm.arrayMethods = NULL;
   vm.arrayMethods = newClass(copyString("Array", 5));
@@ -3538,6 +3699,14 @@ void registerBuiltins(void) {
   defineNativeMethod(vm.setMethods, "difference", setDifference, 1);
   defineNativeMethod(vm.setMethods, "__iter__", collectionIter, 0);
 
+  vm.bytesMethods = NULL;
+  vm.bytesMethods = newClass(copyString("Bytes", 5));
+  defineNativeMethod(vm.bytesMethods, "slice", bytesSlice, 2);
+  defineNativeMethod(vm.bytesMethods, "indexOf", bytesIndexOf, 1);
+  defineNativeMethod(vm.bytesMethods, "toArray", bytesToArray, 0);
+  defineNativeMethod(vm.bytesMethods, "hex", bytesHex, 0);
+  defineNativeMethod(vm.bytesMethods, "__iter__", collectionIter, 0);
+
   vm.iteratorMethods = NULL;
   vm.iteratorMethods = newClass(copyString("Iterator", 8));
   defineNativeMethod(vm.iteratorMethods, "__iter__", iteratorSelf, 0);
@@ -3577,6 +3746,8 @@ void registerBuiltins(void) {
   defineNative("Array", arrayConstructorNative);
   defineNative("Map", mapConstructorNative);
   defineNative("Set", setConstructorNative);
+  defineNative("Bytes", bytesConstructorNative);
+  defineNative("bytesFromHex", bytesFromHexNative);
   defineNative("toString", toStringNative);
   defineNative("toInt", toIntNative);
   defineNative("toDouble", toDoubleNative);

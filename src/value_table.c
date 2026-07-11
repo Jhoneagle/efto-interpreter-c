@@ -41,6 +41,10 @@ uint32_t hashValue(Value value) {
       if (value.as.obj->type == OBJ_STRING) {
         return ((ObjString*)value.as.obj)->hash;
       }
+      if (value.as.obj->type == OBJ_BYTES) {
+        // Content hash so equal-content byte keys collide correctly.
+        return ((ObjBytes*)value.as.obj)->hash;
+      }
       // Identity hash for other objects.
       uintptr_t ptr = (uintptr_t)value.as.obj;
       return (uint32_t)(ptr ^ (ptr >> 16));

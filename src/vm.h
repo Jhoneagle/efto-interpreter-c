@@ -62,6 +62,7 @@ typedef struct {
   ObjString* magicIter;
   ObjString* magicNext;
   ObjClass* arrayMethods;
+  ObjClass* bytesMethods;
   ObjClass* fileMethods;
   ObjClass* iteratorMethods;
   ObjClass* mapMethods;

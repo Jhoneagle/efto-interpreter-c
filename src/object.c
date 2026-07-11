@@ -33,6 +33,25 @@ ObjArray* newArray() {
   return array;
 }
 
+ObjBytes* newBytes(const uint8_t* data, int length) {
+  // Allocate and fill the buffer BEFORE the object, so no unrooted GC object
+  // is live across an allocation (mirrors copyString).
+  uint8_t* buffer = ALLOCATE(uint8_t, length);  // NULL when length == 0
+  if (length > 0) memcpy(buffer, data, length);
+
+  uint32_t hash = 2166136261u;
+  for (int i = 0; i < length; i++) {
+    hash ^= buffer[i];
+    hash *= 16777619;
+  }
+
+  ObjBytes* bytes = ALLOCATE_OBJ(ObjBytes, OBJ_BYTES);
+  bytes->length = length;
+  bytes->bytes = buffer;
+  bytes->hash = hash;
+  return bytes;
+}
+
 ObjIterator* newIterator(Value source) {
   ObjIterator* iter = ALLOCATE_OBJ(ObjIterator, OBJ_ITERATOR);
   iter->source = source;
@@ -300,6 +319,9 @@ void printObject(Value value) {
       printf("}");
       break;
     }
+    case OBJ_BYTES:
+      printf("bytes(len=%d)", AS_BYTES(value)->length);
+      break;
     case OBJ_NATIVE:
       printf("<native fn>");
       break;
