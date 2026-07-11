@@ -9,6 +9,7 @@
 typedef struct {
   const char* start;
   const char* current;
+  const char* lineStart; // start of the current source line (for columns)
   int line;
   int interpolationDepth;
   int numBraces[MAX_INTERPOLATION_NESTING];
@@ -19,8 +20,16 @@ Scanner scanner;
 void initScanner(const char* source) {
   scanner.start = source;
   scanner.current = source;
+  scanner.lineStart = source;
   scanner.line = 1;
   scanner.interpolationDepth = 0;
+}
+
+// 1-based column of the current token's start within its line. Clamped to >= 1
+// (a multi-line string token's start precedes the final lineStart).
+static int currentColumn(void) {
+  int col = (int)(scanner.start - scanner.lineStart) + 1;
+  return col < 1 ? 1 : col;
 }
 
 static bool isAlpha(char c) {
@@ -38,8 +47,14 @@ static bool isAtEnd() {
 }
 
 static char advance() {
+  char c = *scanner.current;
   scanner.current++;
-  return scanner.current[-1];
+  // Track line/column centrally: every newline is consumed through advance().
+  if (c == '\n') {
+    scanner.line++;
+    scanner.lineStart = scanner.current;
+  }
+  return c;
 }
 
 static char peek() {
@@ -64,6 +79,7 @@ static Token makeToken(TokenType type) {
   token.start = scanner.start;
   token.length = (int)(scanner.current - scanner.start);
   token.line = scanner.line;
+  token.column = currentColumn();
   return token;
 }
 
@@ -73,6 +89,7 @@ static Token errorToken(const char* message) {
   token.start = message;
   token.length = (int)strlen(message);
   token.line = scanner.line;
+  token.column = currentColumn();
   return token;
 }
 
@@ -86,7 +103,6 @@ static void skipWhitespace() {
         advance();
         break;
       case '\n':
-        scanner.line++;
         advance();
         break;
       case '/':
@@ -106,7 +122,6 @@ static void skipWhitespace() {
               advance(); advance();
               depth--;
             } else {
-              if (peek() == '\n') scanner.line++;
               advance();
             }
           }
@@ -257,12 +272,10 @@ static Token stringContinuation() {
     if (peek() == '\\' && !isAtEnd()) {
       advance(); // skip backslash
       if (!isAtEnd()) {
-        if (peek() == '\n') scanner.line++;
         advance(); // skip escaped char
       }
       continue;
     }
-    if (peek() == '\n') scanner.line++;
     if (peek() == '$' && peekNext() == '{') {
       Token token = makeToken(TOKEN_INTERPOLATION);
       advance(); // skip $
@@ -286,12 +299,10 @@ static Token string() {
     if (peek() == '\\' && !isAtEnd()) {
       advance(); // skip backslash
       if (!isAtEnd()) {
-        if (peek() == '\n') scanner.line++;
         advance(); // skip escaped char
       }
       continue;
     }
-    if (peek() == '\n') scanner.line++;
     if (peek() == '$' && peekNext() == '{') {
       // Interpolated string: token covers from opening " to just before ${
       Token token = makeToken(TOKEN_INTERPOLATION);
@@ -406,6 +417,7 @@ ScannerState saveScannerState() {
   ScannerState state;
   state.start = scanner.start;
   state.current = scanner.current;
+  state.lineStart = scanner.lineStart;
   state.line = scanner.line;
   state.interpolationDepth = scanner.interpolationDepth;
   for (int i = 0; i < MAX_INTERPOLATION_NESTING; i++) {
@@ -417,6 +429,7 @@ ScannerState saveScannerState() {
 void restoreScannerState(ScannerState state) {
   scanner.start = state.start;
   scanner.current = state.current;
+  scanner.lineStart = state.lineStart;
   scanner.line = state.line;
   scanner.interpolationDepth = state.interpolationDepth;
   for (int i = 0; i < MAX_INTERPOLATION_NESTING; i++) {

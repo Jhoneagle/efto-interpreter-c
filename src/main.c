@@ -71,21 +71,67 @@ static void setupSearchPaths(const char* scriptPath) {
   vm.searchPaths[vm.searchPathCount++] = getExeDir();
 }
 
+// True when accumulated REPL input forms a complete statement: all (), [], {}
+// are balanced and no string literal is left open. Bracket/quote characters
+// inside string literals and // line comments are ignored. Returns true on a
+// surplus of closers too, so the compiler can report the error.
+static bool replInputComplete(const char* src) {
+  int depth = 0;
+  bool inString = false;
+  for (const char* p = src; *p; p++) {
+    char c = *p;
+    if (inString) {
+      if (c == '\\' && p[1]) { p++; continue; }
+      if (c == '"') inString = false;
+      continue;
+    }
+    if (c == '"') { inString = true; continue; }
+    if (c == '/' && p[1] == '/') {
+      while (p[1] && p[1] != '\n') p++;
+      continue;
+    }
+    if (c == '{' || c == '(' || c == '[') depth++;
+    else if (c == '}' || c == ')' || c == ']') depth--;
+  }
+  return !inString && depth <= 0;
+}
+
 static void repl() {
   vm.searchPathCount = 0;
   vm.searchPaths[vm.searchPathCount++] = getCwd();
   vm.searchPaths[vm.searchPathCount++] = getExeDir();
 
+  char buffer[65536];
+  size_t len = 0;
+  buffer[0] = '\0';
   char line[1024];
+
   for (;;) {
-    printf("> ");
+    // Secondary prompt while a multi-line statement (fun/class/match/…) is
+    // still open.
+    printf(len == 0 ? "> " : "... ");
 
     if (!fgets(line, sizeof(line), stdin)) {
       printf("\n");
       break;
     }
 
-    interpret(line);
+    size_t lineLen = strlen(line);
+    if (len + lineLen >= sizeof(buffer)) {
+      fprintf(stderr, "Input too long; discarding.\n");
+      len = 0;
+      buffer[0] = '\0';
+      continue;
+    }
+    memcpy(buffer + len, line, lineLen + 1);
+    len += lineLen;
+
+    // Keep buffering until the input balances (or a string closes).
+    if (!replInputComplete(buffer)) continue;
+
+    interpret(buffer);
+    len = 0;
+    buffer[0] = '\0';
   }
 }
 

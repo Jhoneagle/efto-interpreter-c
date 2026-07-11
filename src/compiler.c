@@ -31,7 +31,7 @@ Chunk* currentChunk() {
 void errorAt(Token* token, const char* message) {
   if (parser.panicMode) return;
   parser.panicMode = true;
-  fprintf(stderr, "[line %d] Error", token->line);
+  fprintf(stderr, "[line %d:%d] Error", token->line, token->column);
 
   if (token->type == TOKEN_EOF) {
     fprintf(stderr, " at end");
@@ -646,6 +646,8 @@ Token syntheticToken(const char* text) {
   Token token;
   token.start = text;
   token.length = (int)strlen(text);
+  token.line = 0;
+  token.column = 0;
   return token;
 }
 

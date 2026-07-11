@@ -48,11 +48,13 @@ typedef struct {
   const char* start;
   int length;
   int line;
+  int column; // 1-based column of `start` within its line
 } Token;
 
 typedef struct {
   const char* start;
   const char* current;
+  const char* lineStart;
   int line;
   int interpolationDepth;
   int numBraces[8];
