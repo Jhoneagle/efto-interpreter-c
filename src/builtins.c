@@ -2091,8 +2091,121 @@ static Value powNative(int argCount, Value* args) {
   return DOUBLE_VAL(pow(AS_DOUBLE_COERCE(args[0]), AS_DOUBLE_COERCE(args[1])));
 }
 
+// Deterministic 64-bit LCG backing math.random(); reseedable via math.seed()
+// for reproducible sequences. Seeded from the clock at startup.
+static uint64_t rngState = 0x2545F4914F6CDD1DULL;
+
+static uint64_t rngNext(void) {
+  rngState = rngState * 6364136223846793005ULL + 1442695040888963407ULL;
+  return rngState;
+}
+
+// Uniform double in [0, 1) using the top 53 bits.
+static double rngNextDouble(void) {
+  return (double)(rngNext() >> 11) * (1.0 / 9007199254740992.0);
+}
+
 static Value randomNative(int argCount, Value* args) {
-  return DOUBLE_VAL((double)rand() / RAND_MAX);
+  return DOUBLE_VAL(rngNextDouble());
+}
+
+static Value seedNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_INT(args[0])) {
+    runtimeError("seed() expects an integer argument.");
+    return NIL_VAL;
+  }
+  // SplitMix64-style scramble so nearby seeds give decorrelated streams.
+  uint64_t z = (uint64_t)AS_INT(args[0]) + 0x9E3779B97F4A7C15ULL;
+  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+  z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+  rngState = z ^ (z >> 31);
+  return NIL_VAL;
+}
+
+static int64_t integerGcd(int64_t a, int64_t b) {
+  if (a < 0) a = -a;
+  if (b < 0) b = -b;
+  while (b != 0) {
+    int64_t t = a % b;
+    a = b;
+    b = t;
+  }
+  return a;
+}
+
+static Value gcdNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_INT(args[0]) || !IS_INT(args[1])) {
+    runtimeError("gcd() expects two integer arguments.");
+    return NIL_VAL;
+  }
+  return INT_VAL(integerGcd(AS_INT(args[0]), AS_INT(args[1])));
+}
+
+static Value lcmNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_INT(args[0]) || !IS_INT(args[1])) {
+    runtimeError("lcm() expects two integer arguments.");
+    return NIL_VAL;
+  }
+  int64_t a = AS_INT(args[0]), b = AS_INT(args[1]);
+  if (a == 0 || b == 0) return INT_VAL(0);
+  int64_t r = (a / integerGcd(a, b)) * b; // divide first to limit overflow
+  return INT_VAL(r < 0 ? -r : r);
+}
+
+static Value hypotNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+    runtimeError("hypot() expects two number arguments.");
+    return NIL_VAL;
+  }
+  return DOUBLE_VAL(hypot(AS_DOUBLE_COERCE(args[0]), AS_DOUBLE_COERCE(args[1])));
+}
+
+static Value floorDivNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+    runtimeError("floorDiv() expects two number arguments.");
+    return NIL_VAL;
+  }
+  if (IS_INT(args[0]) && IS_INT(args[1])) {
+    int64_t a = AS_INT(args[0]), b = AS_INT(args[1]);
+    if (b == 0) {
+      raiseError(vm.valueErrorClass, "floorDiv() division by zero.");
+      return NIL_VAL;
+    }
+    int64_t q = a / b, r = a % b;
+    if (r != 0 && ((r < 0) != (b < 0))) q--; // round toward negative infinity
+    return INT_VAL(q);
+  }
+  double a = AS_DOUBLE_COERCE(args[0]), b = AS_DOUBLE_COERCE(args[1]);
+  if (b == 0.0) {
+    raiseError(vm.valueErrorClass, "floorDiv() division by zero.");
+    return NIL_VAL;
+  }
+  return DOUBLE_VAL(floor(a / b));
+}
+
+static Value modNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+    runtimeError("mod() expects two number arguments.");
+    return NIL_VAL;
+  }
+  if (IS_INT(args[0]) && IS_INT(args[1])) {
+    int64_t a = AS_INT(args[0]), b = AS_INT(args[1]);
+    if (b == 0) {
+      raiseError(vm.valueErrorClass, "mod() by zero.");
+      return NIL_VAL;
+    }
+    int64_t r = a % b;
+    if (r != 0 && ((r < 0) != (b < 0))) r += b; // result takes divisor's sign
+    return INT_VAL(r);
+  }
+  double a = AS_DOUBLE_COERCE(args[0]), b = AS_DOUBLE_COERCE(args[1]);
+  if (b == 0.0) {
+    raiseError(vm.valueErrorClass, "mod() by zero.");
+    return NIL_VAL;
+  }
+  double r = fmod(a, b);
+  if (r != 0 && ((r < 0) != (b < 0))) r += b;
+  return DOUBLE_VAL(r);
 }
 
 static Value parseNumberNative(int argCount, Value* args) {
@@ -4473,6 +4586,12 @@ void registerBuiltins(void) {
   defineModuleNative(mathModule, "clamp", clampNative);
   defineModuleNative(mathModule, "lerp", lerpNative);
   defineModuleNative(mathModule, "sign", signNative);
+  defineModuleNative(mathModule, "gcd", gcdNative);
+  defineModuleNative(mathModule, "lcm", lcmNative);
+  defineModuleNative(mathModule, "hypot", hypotNative);
+  defineModuleNative(mathModule, "floorDiv", floorDivNative);
+  defineModuleNative(mathModule, "mod", modNative);
+  defineModuleNative(mathModule, "seed", seedNative);
   defineModuleConstant(mathModule, "PI",
                        DOUBLE_VAL(3.14159265358979323846));
   defineModuleConstant(mathModule, "E",
@@ -4597,5 +4716,6 @@ void registerBuiltins(void) {
   defineNativeMethod(vm.regexMethods, "replaceAll", regexReplaceAllNative, 2);
   defineNativeMethod(vm.regexMethods, "split", regexSplitNative, 1);
 
-  srand((unsigned int)time(NULL));
+  // Seed the deterministic RNG used by math.random()/math.seed() from the clock.
+  rngState = (uint64_t)time(NULL) ^ 0x9E3779B97F4A7C15ULL;
 }

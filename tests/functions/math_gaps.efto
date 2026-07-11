@@ -1,0 +1,62 @@
+// math gaps: gcd/lcm/hypot/floorDiv/mod + seedable RNG (Commit 14).
+import math;
+import { ValueError } from error;
+
+// gcd (integer, absolute-value based; gcd(0,0)=0).
+print math.gcd(12, 18);  // expect: 6
+print math.gcd(0, 0);    // expect: 0
+print math.gcd(0, 5);    // expect: 5
+print math.gcd(-12, 18); // expect: 6
+print math.gcd(17, 5);   // expect: 1
+
+// lcm (0 when either operand is 0).
+print math.lcm(4, 6);  // expect: 12
+print math.lcm(0, 5);  // expect: 0
+print math.lcm(-4, 6); // expect: 12
+
+// hypot.
+print math.hypot(3, 4); // expect: 5
+print math.hypot(0, 0); // expect: 0
+
+// floorDiv rounds toward negative infinity.
+print math.floorDiv(7, 2);   // expect: 3
+print math.floorDiv(-7, 2);  // expect: -4
+print math.floorDiv(7, -2);  // expect: -4
+print math.floorDiv(-7, -2); // expect: 3
+print math.floorDiv(6, 3);   // expect: 2
+print math.floorDiv(7.5, 2); // expect: 3
+
+// mod takes the sign of the divisor (Python-style), unlike the % operator.
+print math.mod(7, 3);   // expect: 1
+print math.mod(-7, 3);  // expect: 2
+print math.mod(7, -3);  // expect: -2
+print math.mod(-7, -3); // expect: -1
+print math.mod(5, 5);   // expect: 0
+
+// Division by zero is a catchable ValueError.
+try {
+  math.floorDiv(1, 0);
+} catch (ValueError e) {
+  print e.message; // expect: floorDiv() division by zero.
+}
+try {
+  math.mod(1, 0);
+} catch (ValueError e) {
+  print e.message; // expect: mod() by zero.
+}
+
+// Seedable RNG: the same seed reproduces the same sequence.
+math.seed(42);
+var a1 = math.random();
+var a2 = math.random();
+math.seed(42);
+var b1 = math.random();
+var b2 = math.random();
+print a1 == b1; // expect: true
+print a2 == b2; // expect: true
+print a1 != a2; // expect: true
+
+// random() stays in [0, 1).
+math.seed(7);
+var r = math.random();
+print r >= 0 and r < 1; // expect: true
