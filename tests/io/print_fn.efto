@@ -1,0 +1,27 @@
+// write()/println() natives: variadic, space-separated, first-class values.
+// (Distinct from the `print` statement keyword, which appends a newline and
+// can't be passed as a callback.)
+
+// println joins args with spaces and appends a newline.
+println("a", "b", "c"); // expect: a b c
+println(1, true, nil);  // expect: 1 true nil
+println();              // expect:
+
+// write writes without a trailing newline; the next println finishes the line.
+write("no");
+println("-newline"); // expect: no-newline
+
+// write can emit several pieces on one line.
+write("x");
+write("y");
+println("z"); // expect: xyz
+
+// println is a first-class value: usable as a forEach callback.
+[10, 20, 30].forEach(println);
+// expect: 10
+// expect: 20
+// expect: 30
+
+// Stored in a variable and called.
+var out = println;
+out("stored"); // expect: stored

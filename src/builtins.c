@@ -1368,6 +1368,267 @@ static Value assertNative(int argCount, Value* args) {
   return NIL_VAL;
 }
 
+// --- write()/println() natives and format() ---
+//
+// These are first-class global functions (unlike the `print` statement keyword,
+// which appends a newline and can't be passed as a value). Both space-join their
+// stringified arguments; `println(...)` appends a newline, `write(...)` does not.
+// The plan called the no-newline variant `print()`, but the `print` statement
+// keyword shadows any global of that name, so it's exposed as `write()` — a
+// reachable, callback-friendly primitive (e.g. `arr.forEach(println)`).
+
+static void printSpaceSeparated(int argCount, Value* args) {
+  for (int i = 0; i < argCount; i++) {
+    if (i > 0) fputc(' ', stdout);
+    ObjString* s = stringify(args[i]);
+    fwrite(s->chars, 1, (size_t)s->length, stdout);
+  }
+}
+
+static Value writeNative(int argCount, Value* args) {
+  printSpaceSeparated(argCount, args);
+  return NIL_VAL;
+}
+
+static Value printlnNative(int argCount, Value* args) {
+  printSpaceSeparated(argCount, args);
+  fputc('\n', stdout);
+  return NIL_VAL;
+}
+
+// Small growable text buffer for format() (plain malloc; copied out via
+// copyString, so no GC-object ownership is involved).
+typedef struct {
+  char* data;
+  int len;
+  int cap;
+} FmtBuf;
+
+static void fbInit(FmtBuf* b) { b->data = NULL; b->len = 0; b->cap = 0; }
+static void fbFree(FmtBuf* b) { free(b->data); fbInit(b); }
+
+static void fbEnsure(FmtBuf* b, int extra) {
+  if (b->len + extra <= b->cap) return;
+  int cap = b->cap < 16 ? 16 : b->cap;
+  while (cap < b->len + extra) cap *= 2;
+  b->data = (char*)realloc(b->data, cap);
+  b->cap = cap;
+}
+
+static void fbPut(FmtBuf* b, const char* s, int n) {
+  fbEnsure(b, n);
+  memcpy(b->data + b->len, s, n);
+  b->len += n;
+}
+
+static void fbPutc(FmtBuf* b, char c) {
+  fbEnsure(b, 1);
+  b->data[b->len++] = c;
+}
+
+static void fbPad(FmtBuf* b, char pad, int n) {
+  for (int i = 0; i < n; i++) fbPutc(b, pad);
+}
+
+// Emit already-rendered text with width padding / alignment / zero-pad. For
+// zero-pad, any leading sign stays in front of the zeros.
+static void fbEmitPadded(FmtBuf* b, const char* text, int len,
+                         int width, bool leftAlign, bool zeroPad) {
+  int pad = width - len;
+  if (pad < 0) pad = 0;
+  if (leftAlign) {
+    fbPut(b, text, len);
+    fbPad(b, ' ', pad);
+  } else if (zeroPad) {
+    int signLen = (len > 0 && (text[0] == '-' || text[0] == '+')) ? 1 : 0;
+    fbPut(b, text, signLen);
+    fbPad(b, '0', pad);
+    fbPut(b, text + signLen, len - signLen);
+  } else {
+    fbPad(b, ' ', pad);
+    fbPut(b, text, len);
+  }
+}
+
+// Render one placeholder value per its spec. Returns false (after raiseError)
+// on a spec/argument mismatch.
+static bool formatOne(FmtBuf* b, Value val, const char* spec, int speclen) {
+  bool leftAlign = false, zeroPad = false;
+  int width = 0, precision = -1;
+  char type = '\0';
+  int p = 0;
+
+  while (p < speclen && (spec[p] == '-' || spec[p] == '0')) {
+    if (spec[p] == '-') leftAlign = true; else zeroPad = true;
+    p++;
+  }
+  while (p < speclen && spec[p] >= '0' && spec[p] <= '9') {
+    width = width * 10 + (spec[p] - '0');
+    if (width > 4096) {
+      raiseError(vm.valueErrorClass, "format: width too large.");
+      return false;
+    }
+    p++;
+  }
+  if (p < speclen && spec[p] == '.') {
+    p++;
+    precision = 0;
+    while (p < speclen && spec[p] >= '0' && spec[p] <= '9') {
+      precision = precision * 10 + (spec[p] - '0');
+      if (precision > 4096) {
+        raiseError(vm.valueErrorClass, "format: precision too large.");
+        return false;
+      }
+      p++;
+    }
+  }
+  if (p < speclen) type = spec[p++];
+  if (p != speclen) {
+    raiseError(vm.valueErrorClass, "format: invalid format spec.");
+    return false;
+  }
+
+  // With no explicit type, an int formats as decimal (so width/zero-pad apply
+  // naturally); everything else stringifies.
+  char effType = type;
+  if (effType == '\0' && IS_INT(val)) effType = 'd';
+
+  // Integer conversions: d (decimal), x/X (hex), o (octal), b (binary).
+  if (effType == 'd' || effType == 'x' || effType == 'X' ||
+      effType == 'o' || effType == 'b') {
+    if (!IS_INT(val)) {
+      raiseError(vm.valueErrorClass,
+                 "format: '%c' expects an integer argument.", type);
+      return false;
+    }
+    int64_t n = AS_INT(val);
+    char digits[80];
+    int dlen;
+    if (effType == 'b') {
+      uint64_t u = (uint64_t)n;
+      char rev[64];
+      int rc = 0;
+      if (u == 0) rev[rc++] = '0';
+      while (u) { rev[rc++] = (char)('0' + (u & 1)); u >>= 1; }
+      dlen = 0;
+      for (int k = rc - 1; k >= 0; k--) digits[dlen++] = rev[k];
+    } else if (effType == 'd') {
+      dlen = snprintf(digits, sizeof(digits), "%" PRId64, n);
+    } else {
+      const char* cf = effType == 'x' ? "%" PRIx64
+                     : effType == 'X' ? "%" PRIX64
+                     : "%" PRIo64;
+      dlen = snprintf(digits, sizeof(digits), cf, (uint64_t)n);
+    }
+    fbEmitPadded(b, digits, dlen, width, leftAlign, zeroPad);
+    return true;
+  }
+
+  // Floating-point conversion.
+  if (effType == 'f') {
+    if (!IS_NUMBER(val)) {
+      raiseError(vm.valueErrorClass, "format: 'f' expects a number argument.");
+      return false;
+    }
+    int prec = precision < 0 ? 6 : precision;
+    char cf[24];
+    snprintf(cf, sizeof(cf), "%%.%df", prec);
+    char num[512];
+    int nlen = snprintf(num, sizeof(num), cf, AS_DOUBLE_COERCE(val));
+    if (nlen < 0) nlen = 0;
+    if (nlen > (int)sizeof(num) - 1) nlen = (int)sizeof(num) - 1;
+    fbEmitPadded(b, num, nlen, width, leftAlign, zeroPad);
+    return true;
+  }
+
+  // String / default: stringify, optional precision truncation, width padding.
+  if (effType == 's' || effType == '\0') {
+    ObjString* s = stringify(val);
+    int slen = s->length;
+    if (precision >= 0 && precision < slen) slen = precision;
+    int pad = width - slen;
+    if (pad < 0) pad = 0;
+    if (leftAlign) {
+      fbPut(b, s->chars, slen);
+      fbPad(b, ' ', pad);
+    } else {
+      fbPad(b, ' ', pad);
+      fbPut(b, s->chars, slen);
+    }
+    return true;
+  }
+
+  raiseError(vm.valueErrorClass, "format: unknown format type '%c'.", type);
+  return false;
+}
+
+static Value formatNative(int argCount, Value* args) {
+  if (argCount < 1 || !IS_STRING(args[0])) {
+    runtimeError("format() expects a format string as the first argument.");
+    return NIL_VAL;
+  }
+  ObjString* fmt = AS_STRING(args[0]);
+  const char* f = fmt->chars;
+  int flen = fmt->length;
+
+  FmtBuf b;
+  fbInit(&b);
+  int argIndex = 1;  // next positional argument (args[0] is the format string)
+
+  for (int i = 0; i < flen; ) {
+    char c = f[i];
+    if (c == '{') {
+      if (i + 1 < flen && f[i + 1] == '{') { fbPutc(&b, '{'); i += 2; continue; }
+      int j = i + 1;
+      while (j < flen && f[j] != '}') j++;
+      if (j >= flen) {
+        fbFree(&b);
+        raiseError(vm.valueErrorClass,
+                   "format: unmatched '{' in format string.");
+        return NIL_VAL;
+      }
+      const char* content = f + i + 1;
+      int contentLen = j - (i + 1);
+      const char* spec = "";
+      int speclen = 0;
+      if (contentLen > 0) {
+        if (content[0] != ':') {
+          fbFree(&b);
+          raiseError(vm.valueErrorClass,
+                     "format: invalid placeholder '{%.*s}'.",
+                     contentLen, content);
+          return NIL_VAL;
+        }
+        spec = content + 1;
+        speclen = contentLen - 1;
+      }
+      if (argIndex >= argCount) {
+        fbFree(&b);
+        raiseError(vm.valueErrorClass,
+                   "format: not enough arguments for format string.");
+        return NIL_VAL;
+      }
+      if (!formatOne(&b, args[argIndex++], spec, speclen)) {
+        fbFree(&b);
+        return NIL_VAL;  // formatOne raised the pending exception
+      }
+      i = j + 1;
+    } else if (c == '}') {
+      if (i + 1 < flen && f[i + 1] == '}') { fbPutc(&b, '}'); i += 2; continue; }
+      fbFree(&b);
+      raiseError(vm.valueErrorClass, "format: unmatched '}' in format string.");
+      return NIL_VAL;
+    } else {
+      fbPutc(&b, c);
+      i++;
+    }
+  }
+
+  ObjString* result = copyString(b.data ? b.data : "", b.len);
+  fbFree(&b);
+  return OBJ_VAL(result);
+}
+
 static Value toIntNative(int argCount, Value* args) {
   if (argCount != 1) {
     runtimeError("toInt() expects 1 argument.");
@@ -3309,6 +3570,9 @@ void registerBuiltins(void) {
 
   defineNative("type", typeNative);
   defineNative("assert", assertNative);
+  defineNative("write", writeNative);
+  defineNative("println", printlnNative);
+  defineNative("format", formatNative);
   defineNative("TypeDescriptor", typeDescriptorNative);
   defineNative("Array", arrayConstructorNative);
   defineNative("Map", mapConstructorNative);

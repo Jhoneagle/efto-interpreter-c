@@ -1,0 +1,38 @@
+// format() — brace-style mini-formatter returning a string.
+import { ValueError } from error;
+
+// Positional substitution.
+print format("x={}, y={}", 10, 20);   // expect: x=10, y=20
+print format("{} and {}", "a", "b");  // expect: a and b
+
+// Literal braces via doubling.
+print format("{{}} {}", 1);           // expect: {} 1
+
+// Width (right-aligned) and left-align flag.
+print format("[{:5}]", 42);           // expect: [   42]
+print format("[{:-5}]", 42);          // expect: [42   ]
+
+// Zero-pad (int, no explicit type) and explicit decimal type.
+print format("[{:05}]", 42);          // expect: [00042]
+print format("[{:05d}]", 42);         // expect: [00042]
+
+// Float precision.
+print format("{:.2f}", 3.14159);      // expect: 3.14
+print format("[{:8.2f}]", 3.14159);   // expect: [    3.14]
+print format("{:.0f}", 2.7);          // expect: 3
+
+// Hex / upper hex / octal / binary.
+print format("{:x} {:X}", 255, 255);  // expect: ff FF
+print format("{:o} {:b}", 8, 5);      // expect: 10 101
+
+// String width and precision (truncation).
+print format("[{:6}]", "hi");         // expect: [    hi]
+print format("[{:.3}]", "abcdef");    // expect: [abc]
+
+// Mismatches raise a catchable ValueError.
+try { format("{}"); }        catch (ValueError e) { print "e-count"; } // expect: e-count
+try { format("{:d}", "no"); } catch (ValueError e) { print "e-type"; } // expect: e-type
+try { format("{:q}", 1); }    catch (ValueError e) { print "e-spec"; } // expect: e-spec
+try { format("{"); }          catch (ValueError e) { print "e-open"; } // expect: e-open
+
+print "done"; // expect: done
