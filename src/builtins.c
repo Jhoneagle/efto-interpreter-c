@@ -386,6 +386,29 @@ static bool mapRemove(Value receiver, int argCount, Value* args,
   return true;
 }
 
+// GC-safe array append. writeValueArray may reallocate the backing store, which
+// under stress can trigger a collection; if `value` is a freshly-allocated
+// object not yet reachable from any root, that collection would free it and the
+// array would store a dangling pointer. Pushing it first keeps it rooted across
+// the append. The caller must keep `array` itself reachable (e.g. pushed).
+static void arrayAppendGuarded(ObjArray* array, Value value) {
+  push(value);
+  writeValueArray(&array->elements, value);
+  pop();
+}
+
+// GC-safe map insertion. valueTableSet may grow the table and trigger a
+// collection; a freshly-built key or value that is not yet reachable would be
+// freed. Rooting both across the insert prevents a dangling entry. The caller
+// must keep `map` itself reachable.
+static void mapSetGuarded(ObjMap* map, Value key, Value value) {
+  push(key);
+  push(value);
+  valueTableSet(&map->entries, key, value);
+  pop();
+  pop();
+}
+
 // Invoke a callback with the given arguments via the VM call stack.
 static bool invokeCallback(Value callback, int argCount,
                            Value* args, Value* result) {
@@ -742,20 +765,17 @@ static bool stringSplit(Value receiver, int argCount, Value* args,
 
   if (delim->length == 0) {
     for (int i = 0; i < str->length; i++) {
-      writeValueArray(&array->elements,
-                      OBJ_VAL(copyString(str->chars + i, 1)));
+      arrayAppendGuarded(array, OBJ_VAL(copyString(str->chars + i, 1)));
     }
   } else {
     const char* start = str->chars;
     const char* end = str->chars + str->length;
     const char* pos;
     while ((pos = strstr(start, delim->chars)) != NULL) {
-      writeValueArray(&array->elements,
-                      OBJ_VAL(copyString(start, (int)(pos - start))));
+      arrayAppendGuarded(array, OBJ_VAL(copyString(start, (int)(pos - start))));
       start = pos + delim->length;
     }
-    writeValueArray(&array->elements,
-                    OBJ_VAL(copyString(start, (int)(end - start))));
+    arrayAppendGuarded(array, OBJ_VAL(copyString(start, (int)(end - start))));
   }
 
   pop(); // remove GC protection
@@ -3671,13 +3691,8 @@ static bool regexMatchNative(Value receiver, int argCount, Value* args,
 
   ObjString* matchStr =
       copyString(text + r.matchStart, r.matchEnd - r.matchStart);
-  push(OBJ_VAL(matchStr));
-  valueTableSet(&map->entries,
-                OBJ_VAL(copyString("match", 5)), OBJ_VAL(matchStr));
-  pop();
-
-  valueTableSet(&map->entries,
-                OBJ_VAL(copyString("index", 5)),
+  mapSetGuarded(map, OBJ_VAL(copyString("match", 5)), OBJ_VAL(matchStr));
+  mapSetGuarded(map, OBJ_VAL(copyString("index", 5)),
                 INT_VAL((int64_t)r.matchStart));
 
   ObjArray* groups = newArray();
@@ -3686,13 +3701,12 @@ static bool regexMatchNative(Value receiver, int argCount, Value* args,
     if (r.groupStart[g] >= 0 && r.groupEnd[g] >= 0) {
       ObjString* gs = copyString(text + r.groupStart[g],
                                   r.groupEnd[g] - r.groupStart[g]);
-      writeValueArray(&groups->elements, OBJ_VAL(gs));
+      arrayAppendGuarded(groups, OBJ_VAL(gs));
     } else {
-      writeValueArray(&groups->elements, NIL_VAL);
+      arrayAppendGuarded(groups, NIL_VAL);
     }
   }
-  valueTableSet(&map->entries,
-                OBJ_VAL(copyString("groups", 6)), OBJ_VAL(groups));
+  mapSetGuarded(map, OBJ_VAL(copyString("groups", 6)), OBJ_VAL(groups));
   pop(); // groups
   pop(); // map
   *result = OBJ_VAL(map);
@@ -3722,12 +3736,8 @@ static bool regexMatchAllNative(Value receiver, int argCount, Value* args,
 
     ObjString* matchStr =
         copyString(text + r.matchStart, r.matchEnd - r.matchStart);
-    push(OBJ_VAL(matchStr));
-    valueTableSet(&map->entries,
-                  OBJ_VAL(copyString("match", 5)), OBJ_VAL(matchStr));
-    pop();
-    valueTableSet(&map->entries,
-                  OBJ_VAL(copyString("index", 5)),
+    mapSetGuarded(map, OBJ_VAL(copyString("match", 5)), OBJ_VAL(matchStr));
+    mapSetGuarded(map, OBJ_VAL(copyString("index", 5)),
                   INT_VAL((int64_t)r.matchStart));
 
     ObjArray* groups = newArray();
@@ -3736,17 +3746,17 @@ static bool regexMatchAllNative(Value receiver, int argCount, Value* args,
       if (r.groupStart[g] >= 0 && r.groupEnd[g] >= 0) {
         ObjString* gs = copyString(text + r.groupStart[g],
                                     r.groupEnd[g] - r.groupStart[g]);
-        writeValueArray(&groups->elements, OBJ_VAL(gs));
+        arrayAppendGuarded(groups, OBJ_VAL(gs));
       } else {
-        writeValueArray(&groups->elements, NIL_VAL);
+        arrayAppendGuarded(groups, NIL_VAL);
       }
     }
-    valueTableSet(&map->entries,
-                  OBJ_VAL(copyString("groups", 6)), OBJ_VAL(groups));
+    mapSetGuarded(map, OBJ_VAL(copyString("groups", 6)), OBJ_VAL(groups));
     pop(); // groups
-    pop(); // map
 
-    writeValueArray(&results->elements, OBJ_VAL(map));
+    // results is still on the stack under map; append map (guarded) then drop it.
+    arrayAppendGuarded(results, OBJ_VAL(map));
+    pop(); // map
 
     // Advance past this match (at least 1 char to avoid infinite loop).
     pos = r.matchEnd > pos ? r.matchEnd : pos + 1;
@@ -3806,12 +3816,12 @@ static bool regexSplitNative(Value receiver, int argCount, Value* args,
     RegexResult r = regexExec(re->compiled, text, pos);
     if (!r.matched) {
       ObjString* rest = copyString(text + pos, textLen - pos);
-      writeValueArray(&parts->elements, OBJ_VAL(rest));
+      arrayAppendGuarded(parts, OBJ_VAL(rest));
       break;
     }
 
     ObjString* before = copyString(text + pos, r.matchStart - pos);
-    writeValueArray(&parts->elements, OBJ_VAL(before));
+    arrayAppendGuarded(parts, OBJ_VAL(before));
 
     pos = r.matchEnd > pos ? r.matchEnd : pos + 1;
   }

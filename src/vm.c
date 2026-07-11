@@ -388,6 +388,8 @@ static char* resolveModulePath(const char* moduleName, int nameLen) {
 }
 
 void initVM() {
+    // Inhibit collection until every builtin root is wired up (see VM.gcInhibit).
+    vm.gcInhibit = true;
     resetStack();
     vm.objects = NULL;
 
@@ -442,6 +444,9 @@ void initVM() {
     vm.magicNext = copyString("__next__", 8);
 
     registerBuiltins();
+
+    // Bootstrap complete: every builtin is now reachable from a root. Allow GC.
+    vm.gcInhibit = false;
 }
 
 void freeVM() {
@@ -1139,9 +1144,12 @@ static bool executeIndexGet(void) {
 }
 
 static bool executeIndexSet(void) {
-  Value value = pop();
-  Value index = pop();
-  Value receiver = pop();
+  // Keep the operands on the stack (rooted) while we work: a map insertion can
+  // grow the table and trigger a GC, which would otherwise free a freshly-built
+  // key/value that is no longer referenced anywhere else.
+  Value value = peek(0);
+  Value index = peek(1);
+  Value receiver = peek(2);
 
   if (IS_ARRAY(receiver)) {
     if (!IS_INT(index)) {
@@ -1191,6 +1199,7 @@ static bool executeIndexSet(void) {
     return false;
   }
 
+  vm.stackTop -= 3; // pop receiver, index, value
   push(value);
   return true;
 }
@@ -1277,10 +1286,13 @@ static InterpretResult executeImport(ObjString* moduleName,
     return INTERPRET_RUNTIME_ERROR;
   }
 
-  // Create closure with module's own globals.
+  // Create closure with module's own globals. Root modFunc across newClosure's
+  // allocations (it is otherwise unreferenced and would be collected).
+  push(OBJ_VAL(modFunc)); // GC protect
   ObjClosure* modClosure = newClosure(modFunc);
   modClosure->globals = &module->values;
   modClosure->globalsOwner = (Obj*)module;
+  pop(); // modFunc (now held by the closure)
   free(resolvedPath);
 
   // Execute module.

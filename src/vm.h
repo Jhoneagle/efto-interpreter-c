@@ -79,6 +79,12 @@ typedef struct {
   bool nativeError;
   Value nativeErrorValue;
   bool pendingUnwind;
+  // When true, reallocate() never triggers a collection. Set during VM
+  // bootstrap (initVM/registerBuiltins), where many long-lived roots are wired
+  // up via intermediate allocations that are not yet reachable from any root —
+  // running the collector mid-wiring would free them. Cleared once bootstrap
+  // completes; all later allocation is fully GC-safe.
+  bool gcInhibit;
   ObjUpvalue* openUpvalues;
   Table importCache;
   ObjString* searchPaths[8];

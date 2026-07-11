@@ -18,7 +18,7 @@ static void collectGarbage();
 void* reallocate(void* pointer, size_t oldSize, size_t newSize) {
   vm.bytesAllocated += newSize - oldSize;
 
-  if (newSize > oldSize) {
+  if (newSize > oldSize && !vm.gcInhibit) {
     #ifdef DEBUG_STRESS_GC
     collectGarbage();
     #endif
