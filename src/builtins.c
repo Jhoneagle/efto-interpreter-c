@@ -1093,6 +1093,275 @@ static bool arrayFilter(Value receiver, int argCount, Value* args,
   return true;
 }
 
+// Truthiness matching filter/find/any/all: only nil and false are falsey.
+#define IS_TRUTHY(v) (!IS_NIL(v) && !(IS_BOOL(v) && !AS_BOOL(v)))
+
+static bool arrayFlatMap(Value receiver, int argCount, Value* args,
+                         Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  Value callback = args[0];
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 2) ? 2 : 1;
+
+  int length = array->elements.count;
+  ObjArray* resultArray = newArray();
+
+  push(receiver);
+  push(callback);
+  push(OBJ_VAL(resultArray));
+
+  for (int i = 0; i < length; i++) {
+    ObjArray* src = AS_ARRAY(vm.stackTop[-3]);
+    Value cb = vm.stackTop[-2];
+    Value cbArgs[2] = { src->elements.values[i], INT_VAL((int64_t)i) };
+
+    Value mapped;
+    if (!invokeCallback(cb, passArgs, cbArgs, &mapped)) {
+      vm.stackTop -= 3;
+      return false;
+    }
+
+    // Flatten one level: array results are spread, other values appended as-is.
+    push(mapped); // GC-protect while appending [receiver, cb, result, mapped]
+    if (IS_ARRAY(mapped)) {
+      ObjArray* inner = AS_ARRAY(vm.stackTop[-1]);
+      int innerLen = inner->elements.count;
+      for (int j = 0; j < innerLen; j++) {
+        ObjArray* dst = AS_ARRAY(vm.stackTop[-2]);
+        inner = AS_ARRAY(vm.stackTop[-1]);
+        writeValueArray(&dst->elements, inner->elements.values[j]);
+      }
+    } else {
+      ObjArray* dst = AS_ARRAY(vm.stackTop[-2]);
+      writeValueArray(&dst->elements, vm.stackTop[-1]);
+    }
+    pop(); // mapped
+  }
+
+  *result = vm.stackTop[-1];
+  vm.stackTop -= 3;
+  return true;
+}
+
+static bool arrayChunk(Value receiver, int argCount, Value* args,
+                       Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  if (!IS_INT(args[0]) || AS_INT(args[0]) <= 0) {
+    raiseError(vm.valueErrorClass, "chunk() size must be a positive integer.");
+    return false;
+  }
+  int n = (int)AS_INT(args[0]);
+  int length = array->elements.count;
+
+  ObjArray* resultArray = newArray();
+  push(receiver);
+  push(OBJ_VAL(resultArray));
+
+  for (int i = 0; i < length; i += n) {
+    ObjArray* chunkArr = newArray();
+    push(OBJ_VAL(chunkArr)); // [receiver, result, chunk]
+    int end = (i + n < length) ? i + n : length;
+    for (int j = i; j < end; j++) {
+      ObjArray* src = AS_ARRAY(vm.stackTop[-3]);
+      ObjArray* c = AS_ARRAY(vm.stackTop[-1]);
+      writeValueArray(&c->elements, src->elements.values[j]);
+    }
+    ObjArray* dst = AS_ARRAY(vm.stackTop[-2]);
+    writeValueArray(&dst->elements, vm.stackTop[-1]); // append the chunk
+    pop(); // chunk
+  }
+
+  *result = vm.stackTop[-1];
+  vm.stackTop -= 2;
+  return true;
+}
+
+static bool arrayPartition(Value receiver, int argCount, Value* args,
+                           Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  Value callback = args[0];
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 2) ? 2 : 1;
+  int length = array->elements.count;
+
+  ObjArray* matches = newArray();
+  push(receiver);
+  push(callback);
+  push(OBJ_VAL(matches));
+  ObjArray* rest = newArray();
+  push(OBJ_VAL(rest)); // [receiver, cb, matches, rest]
+
+  for (int i = 0; i < length; i++) {
+    ObjArray* src = AS_ARRAY(vm.stackTop[-4]);
+    Value cb = vm.stackTop[-3];
+    Value cbArgs[2] = { src->elements.values[i], INT_VAL((int64_t)i) };
+
+    Value test;
+    if (!invokeCallback(cb, passArgs, cbArgs, &test)) {
+      vm.stackTop -= 4;
+      return false;
+    }
+
+    src = AS_ARRAY(vm.stackTop[-4]);
+    Value elem = src->elements.values[i];
+    if (IS_TRUTHY(test)) {
+      writeValueArray(&AS_ARRAY(vm.stackTop[-2])->elements, elem);
+    } else {
+      writeValueArray(&AS_ARRAY(vm.stackTop[-1])->elements, elem);
+    }
+  }
+
+  // Build the [matches, rest] pair.
+  ObjArray* pair = newArray();
+  push(OBJ_VAL(pair)); // [receiver, cb, matches, rest, pair]
+  writeValueArray(&AS_ARRAY(vm.stackTop[-1])->elements, vm.stackTop[-3]);
+  writeValueArray(&AS_ARRAY(vm.stackTop[-1])->elements, vm.stackTop[-2]);
+
+  *result = vm.stackTop[-1];
+  vm.stackTop -= 5;
+  return true;
+}
+
+static bool arrayUnique(Value receiver, int argCount, Value* args,
+                        Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  int length = array->elements.count;
+
+  ObjArray* resultArray = newArray();
+  push(receiver);
+  push(OBJ_VAL(resultArray));
+
+  // Dedup via a ValueTable (same value-equality as sets/maps). Its keys are all
+  // elements of the rooted receiver, so they stay reachable without marking.
+  ValueTable seen;
+  initValueTable(&seen);
+  for (int i = 0; i < length; i++) {
+    ObjArray* src = AS_ARRAY(vm.stackTop[-2]);
+    Value v = src->elements.values[i];
+    Value dummy;
+    if (!valueTableGet(&seen, v, &dummy)) {
+      valueTableSet(&seen, v, BOOL_VAL(true));
+      ObjArray* dst = AS_ARRAY(vm.stackTop[-1]);
+      writeValueArray(&dst->elements, v);
+    }
+  }
+  freeValueTable(&seen);
+
+  *result = vm.stackTop[-1];
+  vm.stackTop -= 2;
+  return true;
+}
+
+static bool arraySum(Value receiver, int argCount, Value* args,
+                     Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  int length = array->elements.count;
+  bool isDouble = false;
+  int64_t isum = 0;
+  double dsum = 0.0;
+
+  for (int i = 0; i < length; i++) {
+    Value v = array->elements.values[i];
+    if (IS_INT(v)) {
+      if (isDouble) dsum += (double)AS_INT(v);
+      else isum += AS_INT(v);
+    } else if (IS_DOUBLE(v)) {
+      if (!isDouble) { isDouble = true; dsum = (double)isum; }
+      dsum += AS_DOUBLE(v);
+    } else {
+      raiseError(vm.valueErrorClass,
+                 "sum() requires all elements to be numbers.");
+      return false;
+    }
+  }
+
+  *result = isDouble ? DOUBLE_VAL(dsum) : INT_VAL(isum);
+  return true;
+}
+
+static bool arrayCount(Value receiver, int argCount, Value* args,
+                       Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  Value callback = args[0];
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 2) ? 2 : 1;
+  int length = array->elements.count;
+  int64_t count = 0;
+
+  push(receiver);
+  push(callback);
+
+  for (int i = 0; i < length; i++) {
+    ObjArray* src = AS_ARRAY(vm.stackTop[-2]);
+    Value cb = vm.stackTop[-1];
+    Value cbArgs[2] = { src->elements.values[i], INT_VAL((int64_t)i) };
+
+    Value test;
+    if (!invokeCallback(cb, passArgs, cbArgs, &test)) {
+      vm.stackTop -= 2;
+      return false;
+    }
+    if (IS_TRUTHY(test)) count++;
+  }
+
+  vm.stackTop -= 2;
+  *result = INT_VAL(count);
+  return true;
+}
+
+static bool arrayGroupBy(Value receiver, int argCount, Value* args,
+                         Value* result) {
+  ObjArray* array = AS_ARRAY(receiver);
+  Value callback = args[0];
+  int cbArity = getCallableArity(callback);
+  int passArgs = (cbArity >= 2) ? 2 : 1;
+  int length = array->elements.count;
+
+  ObjMap* resultMap = newMap();
+  push(receiver);
+  push(callback);
+  push(OBJ_VAL(resultMap)); // [receiver, cb, result]
+
+  for (int i = 0; i < length; i++) {
+    ObjArray* src = AS_ARRAY(vm.stackTop[-3]);
+    Value cb = vm.stackTop[-2];
+    Value cbArgs[2] = { src->elements.values[i], INT_VAL((int64_t)i) };
+
+    Value key;
+    if (!invokeCallback(cb, passArgs, cbArgs, &key)) {
+      vm.stackTop -= 3;
+      return false;
+    }
+
+    src = AS_ARRAY(vm.stackTop[-3]);
+    Value elem = src->elements.values[i];
+    push(key); // [receiver, cb, result, key]
+
+    ObjMap* dst = AS_MAP(vm.stackTop[-2]);
+    Value bucketVal;
+    if (valueTableGet(&dst->entries, vm.stackTop[-1], &bucketVal) &&
+        IS_ARRAY(bucketVal)) {
+      push(bucketVal); // [.., key, bucket]
+      writeValueArray(&AS_ARRAY(vm.stackTop[-1])->elements, elem);
+      pop(); // bucket
+    } else {
+      ObjArray* bucket = newArray();
+      push(OBJ_VAL(bucket)); // [receiver, cb, result, key, bucket]
+      writeValueArray(&AS_ARRAY(vm.stackTop[-1])->elements, elem);
+      dst = AS_MAP(vm.stackTop[-3]);
+      valueTableSet(&dst->entries, vm.stackTop[-2], vm.stackTop[-1]);
+      pop(); // bucket
+    }
+    pop(); // key
+  }
+
+  *result = vm.stackTop[-1];
+  vm.stackTop -= 3;
+  return true;
+}
+
+#undef IS_TRUTHY
+
 static bool arrayReduce(Value receiver, int argCount, Value* args,
                         Value* result) {
   ObjArray* array = AS_ARRAY(receiver);
@@ -3917,6 +4186,13 @@ void registerBuiltins(void) {
   defineNativeMethod(vm.arrayMethods, "reverse", arrayReverse, 0);
   defineNativeMethod(vm.arrayMethods, "join", arrayJoin, 1);
   defineNativeMethod(vm.arrayMethods, "flat", arrayFlat, 0);
+  defineNativeMethod(vm.arrayMethods, "flatMap", arrayFlatMap, 1);
+  defineNativeMethod(vm.arrayMethods, "chunk", arrayChunk, 1);
+  defineNativeMethod(vm.arrayMethods, "partition", arrayPartition, 1);
+  defineNativeMethod(vm.arrayMethods, "unique", arrayUnique, 0);
+  defineNativeMethod(vm.arrayMethods, "sum", arraySum, 0);
+  defineNativeMethod(vm.arrayMethods, "count", arrayCount, 1);
+  defineNativeMethod(vm.arrayMethods, "groupBy", arrayGroupBy, 1);
   defineNativeMethod(vm.arrayMethods, "indexOf", arrayIndexOf, 1);
   defineNativeMethod(vm.arrayMethods, "__iter__", collectionIter, 0);
 

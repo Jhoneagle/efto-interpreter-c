@@ -1,0 +1,79 @@
+// Collection helper methods (Commit 11).
+import { ValueError } from error;
+
+// --- flatMap: maps then flattens one level ---
+print [1, 2, 3].flatMap((x) => [x, x * 10]);
+// expect: [1, 10, 2, 20, 3, 30]
+
+// Non-array results are appended as-is (one-level flatten only).
+print [1, 2].flatMap((x) => x + 1);
+// expect: [2, 3]
+
+// Nested arrays are only flattened one level.
+print [1, 2].flatMap((x) => [[x]]);
+// expect: [[1], [2]]
+
+// --- chunk: split into fixed-size pieces (last may be short) ---
+print [1, 2, 3, 4, 5].chunk(2);
+// expect: [[1, 2], [3, 4], [5]]
+
+print [1, 2, 3, 4].chunk(2);
+// expect: [[1, 2], [3, 4]]
+
+print [].chunk(3);
+// expect: []
+
+// chunk(0) is a catchable ValueError.
+try {
+  [1, 2, 3].chunk(0);
+} catch (ValueError e) {
+  print e.message; // expect: chunk() size must be a positive integer.
+}
+
+// --- partition: [matches, rest] ---
+print [1, 2, 3, 4, 5].partition((x) => x % 2 == 0);
+// expect: [[2, 4], [1, 3, 5]]
+
+// --- unique: value-equality dedup, first-occurrence order ---
+print [1, 2, 2, 3, 1, 3, 4].unique();
+// expect: [1, 2, 3, 4]
+
+print ["a", "b", "a", "c", "b"].unique();
+// expect: [a, b, c]
+
+print [1, 1.0, 2].unique();
+// expect: [1, 2]
+
+// --- sum: numbers only, empty -> 0 ---
+print [1, 2, 3, 4].sum();   // expect: 10
+print [1, 2.5, 3].sum();    // expect: 6.5
+print [].sum();             // expect: 0
+
+// Non-number element -> catchable ValueError.
+try {
+  [1, "two", 3].sum();
+} catch (ValueError e) {
+  print e.message; // expect: sum() requires all elements to be numbers.
+}
+
+// --- count: number of elements matching a predicate ---
+print [1, 2, 3, 4, 5, 6].count((x) => x % 2 == 0); // expect: 3
+print [1, 2, 3].count((x) => x > 10);              // expect: 0
+
+// Predicate may use the index (second arg).
+print [10, 20, 30, 40].count((x, i) => i % 2 == 0); // expect: 2
+
+// --- groupBy: key -> array of elements ---
+var groups = [1, 2, 3, 4, 5, 6].groupBy((x) => x % 2 == 0 ? "even" : "odd");
+print groups["even"]; // expect: [2, 4, 6]
+print groups["odd"];  // expect: [1, 3, 5]
+
+// groupBy with integer keys.
+var byLen = ["a", "bb", "cc", "d", "eee"].groupBy((s) => s.length);
+print byLen[1]; // expect: [a, d]
+print byLen[2]; // expect: [bb, cc]
+print byLen[3]; // expect: [eee]
+
+// --- chaining ---
+print [1, 2, 3, 4, 5, 6].filter((x) => x > 2).chunk(2);
+// expect: [[3, 4], [5, 6]]
