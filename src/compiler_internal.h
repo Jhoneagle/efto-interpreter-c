@@ -75,6 +75,12 @@ typedef struct Compiler {
   int localCount;
   Upvalue upvalues[UINT8_COUNT];
   int scopeDepth;
+
+  // Saved loop/finally contexts of the enclosing function. These globals are
+  // reset to NULL while this function compiles so a return/break/continue in a
+  // nested function never references the enclosing function's contexts.
+  struct Loop* enclosingLoop;
+  struct FinallyContext* enclosingFinally;
 } Compiler;
 
 typedef struct ClassCompiler {

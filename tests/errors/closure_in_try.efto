@@ -1,0 +1,37 @@
+// Regression: a function/closure literal defined inside a try (or try/finally)
+// must compile its own return normally, not emit the enclosing try's finally
+// bytecode into the closure. Previously this corrupted the closure's chunk.
+
+// Closure defined inside a try, then invoked as a higher-order callback.
+try {
+  var r = [10, 20, 30].filter((x) => { return x > 10; });
+  print r; // expect: [20, 30]
+
+  var m = [1, 2, 3].map((x) => { return x * x; });
+  print m; // expect: [1, 4, 9]
+} catch (e) {
+  print "unexpected: " + e.message;
+}
+
+// Closure defined inside a try/finally with an explicit return.
+try {
+  var pick = (n) => {
+    if (n < 0) return "neg";
+    return "pos";
+  };
+  print pick(5);  // expect: pos
+  print pick(-5); // expect: neg
+} finally {
+  print "finally ran"; // expect: finally ran
+}
+
+// Nested: closure inside a try inside a function.
+fun outer() {
+  try {
+    var f = (a) => { return a + 1; };
+    return f(41);
+  } finally {
+    print "outer finally"; // expect: outer finally
+  }
+}
+print outer(); // expect: 42

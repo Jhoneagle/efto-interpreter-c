@@ -145,6 +145,14 @@ void initCompiler(Compiler* compiler, FunctionType type) {
   compiler->localCount = 0;
   compiler->scopeDepth = 0;
   compiler->function = newFunction();
+
+  // A nested function must not inherit the enclosing function's loop/finally
+  // contexts: its return/break/continue are local to it. Save and reset.
+  compiler->enclosingLoop = currentLoop;
+  compiler->enclosingFinally = currentFinally;
+  currentLoop = NULL;
+  currentFinally = NULL;
+
   current = compiler;
 
   if (type != TYPE_SCRIPT && type != TYPE_ARROW) {
@@ -175,6 +183,10 @@ ObjFunction* endCompiler() {
         ? function->name->chars : "<script>");
   }
   #endif
+
+  // Restore the enclosing function's loop/finally contexts.
+  currentLoop = current->enclosingLoop;
+  currentFinally = current->enclosingFinally;
 
   current = current->enclosing;
   return function;
