@@ -1,0 +1,34 @@
+// json errors are catchable ValueError instances.
+import json;
+import { ValueError, Error } from error;
+
+// Malformed object (bare word key).
+try {
+  json.parse("{bad}");
+  print "unreachable";
+} catch (ValueError e) {
+  print "caught";        // expect: caught
+  print e is ValueError; // expect: true
+  print e is Error;      // expect: true
+}
+
+// Unterminated array.
+try { json.parse("[1, 2"); } catch (ValueError e) { print "e-array"; } // expect: e-array
+
+// Trailing characters after a complete value.
+try { json.parse("1 2"); } catch (ValueError e) { print "e-trailing"; } // expect: e-trailing
+
+// Empty input.
+try { json.parse(""); } catch (ValueError e) { print "e-empty"; } // expect: e-empty
+
+// Invalid escape.
+try { json.parse("\"a\\xb\""); } catch (ValueError e) { print "e-escape"; } // expect: e-escape
+
+// A non-string map key can't be serialized.
+try { json.stringify({1: "x"}); } catch (ValueError e) { print "e-key"; } // expect: e-key
+
+// A non-finite double (inf) can't be serialized.
+try { json.stringify(1.0 / 0.0); } catch (ValueError e) { print "e-inf"; } // expect: e-inf
+
+// Control resumes normally after caught json errors.
+print "after"; // expect: after

@@ -1,0 +1,15 @@
+// json.stringify with an indent argument pretty-prints with newlines.
+import json;
+
+// Nested single-key object keeps a deterministic key order.
+print json.stringify({"a": [1, 2]}, 2);
+// expect: {
+// expect:   "a": [
+// expect:     1,
+// expect:     2
+// expect:   ]
+// expect: }
+
+// An empty container stays on one line even when pretty-printing.
+print json.stringify([], 2);  // expect: []
+print json.stringify({}, 2);  // expect: {}

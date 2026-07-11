@@ -16,6 +16,7 @@
 
 #include "builtins.h"
 #include "regex_engine.h"
+#include "json.h"
 #include "common.h"
 #include "memory.h"
 #include "object.h"
@@ -3219,6 +3220,11 @@ void registerBuiltins(void) {
 
     defineModuleNative(errorModule, "isError", isErrorNative);
   }
+
+  // --- json module ---
+  ObjModule* jsonModule = registerBuiltinModule("json");
+  defineModuleNative(jsonModule, "stringify", jsonStringifyNative);
+  defineModuleNative(jsonModule, "parse", jsonParseNative);
 
   // --- regex module ---
   ObjModule* regexModule = registerBuiltinModule("regex");

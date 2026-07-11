@@ -1,0 +1,28 @@
+// json.stringify — compact output for primitives, arrays, objects, escaping.
+import json;
+
+// Primitives.
+print json.stringify(nil);        // expect: null
+print json.stringify(true);       // expect: true
+print json.stringify(false);      // expect: false
+print json.stringify(42);         // expect: 42
+print json.stringify(-7);         // expect: -7
+print json.stringify(3.5);        // expect: 3.5
+print json.stringify("hello");    // expect: "hello"
+
+// Empty containers.
+print json.stringify([]);         // expect: []
+print json.stringify({});         // expect: {}
+
+// Arrays (order preserved).
+print json.stringify([1, 2, 3]);          // expect: [1,2,3]
+print json.stringify([true, nil, "x"]);   // expect: [true,null,"x"]
+
+// Single-key object (deterministic order).
+print json.stringify({"a": 1});           // expect: {"a":1}
+
+// Nesting.
+print json.stringify({"a": [1, {"b": 2}]}); // expect: {"a":[1,{"b":2}]}
+
+// String escaping: quote, backslash, newline, tab.
+print json.stringify("q\"b\\c\nd\te"); // expect: "q\"b\\c\nd\te"

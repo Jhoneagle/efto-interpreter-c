@@ -1,0 +1,23 @@
+// json round-trips: parse(stringify(x)) reconstructs the structure.
+import json;
+
+// Array round-trip.
+var a = json.parse(json.stringify([1, 2, 3]));
+print a[0] + a[1] + a[2]; // expect: 6
+
+// Object round-trip, checked by key access (map order is not guaranteed).
+var m = json.parse(json.stringify({"name": "efto", "n": 3, "ok": true}));
+print m["name"]; // expect: efto
+print m["n"];    // expect: 3
+print m["ok"];   // expect: true
+
+// Deeply nested round-trip.
+var deep = json.parse(json.stringify({"a": [{"b": [1, {"c": "d"}]}]}));
+print deep["a"][0]["b"][1]["c"]; // expect: d
+
+// stringify(parse(text)) of an array of objects preserves element order.
+print json.stringify(json.parse("[{\"n\":1},{\"n\":2}]")); // expect: [{"n":1},{"n":2}]
+
+// Strings with special characters survive a round-trip.
+var s = json.parse(json.stringify("tab\there\nline"));
+print s == "tab\there\nline"; // expect: true

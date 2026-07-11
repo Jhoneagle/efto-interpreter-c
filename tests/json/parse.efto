@@ -1,0 +1,42 @@
+// json.parse — produces typed Efto values.
+import json;
+
+// Primitives and types.
+print json.parse("null");        // expect: nil
+print json.parse("true");        // expect: true
+print json.parse("false");       // expect: false
+print json.parse("42");          // expect: 42
+print json.parse("-7");          // expect: -7
+print json.parse("3.5");         // expect: 3.5
+print json.parse("\"hi\"");      // expect: hi
+
+// Integers parse as int, decimals/exponents as double.
+print typeof json.parse("42");     // expect: int
+print typeof json.parse("42.0");   // expect: double
+print typeof json.parse("1e3");    // expect: double
+
+// Whitespace around a value is ignored.
+print json.parse("   99   ");    // expect: 99
+
+// Arrays.
+var a = json.parse("[1, 2, 3]");
+print a.length;  // expect: 3
+print a[0];      // expect: 1
+print a[2];      // expect: 3
+
+// Nested structure with mixed types.
+var v = json.parse("{\"x\": [1, 2, true, null], \"y\": \"hi\"}");
+print v["x"][2]; // expect: true
+print v["x"][3]; // expect: nil
+print v["y"];    // expect: hi
+
+// Escape sequences in strings.
+print json.parse("\"a\\nb\"");   // expect: a
+                                 // expect: b
+
+// Unicode escape (BMP) decodes to UTF-8; length is byte length.
+var s = json.parse("\"\\u00e9\"");  // é (U+00E9) is 2 UTF-8 bytes
+print s.length;  // expect: 2
+
+// Duplicate object keys: last value wins.
+print json.parse("{\"k\": 1, \"k\": 2}")["k"]; // expect: 2
