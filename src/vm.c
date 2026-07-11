@@ -540,9 +540,10 @@ static bool call(ObjClosure* closure, int argCount) {
     return false;
   }
 
-  // Pad missing optional args with nil.
+  // Pad missing optional args with the MISSING sentinel; each such slot has a
+  // matching OP_DEFAULT_ARG that fills it before any user code runs.
   for (int i = argCount; i < arity; i++) {
-    push(NIL_VAL);
+    push(MISSING_VAL);
   }
 
   CallFrame* frame = &vm.frames[vm.frameCount++];
@@ -2050,9 +2051,11 @@ static InterpretResult run(int baseFrame) {
         break;
       }
       case OP_DEFAULT_ARG: {
+        // operand = local slot of the optional parameter. Run the default
+        // expression only if the caller left the slot unfilled (MISSING).
         uint8_t slot = READ_BYTE();
         uint16_t jump = READ_SHORT();
-        if (frame->argCount > slot) {
+        if (!IS_MISSING(frame->slots[slot])) {
           frame->ip += jump;
         }
         break;

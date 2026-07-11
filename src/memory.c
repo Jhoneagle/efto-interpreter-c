@@ -155,6 +155,9 @@ static void blackenObject(Obj* object) {
     case OBJ_FUNCTION: {
       ObjFunction* function = (ObjFunction*)object;
       markObject((Obj*)function->name);
+      for (int i = 0; i < function->paramCount; i++) {
+        markObject((Obj*)function->paramNames[i]);
+      }
       markArray(&function->chunk.constants);
       break;
     }
@@ -228,6 +231,7 @@ static void freeObject(Obj* object) {
     }
     case OBJ_FUNCTION: {
       ObjFunction* function = (ObjFunction*)object;
+      FREE_ARRAY(ObjString*, function->paramNames, function->paramCount);
       freeChunk(&function->chunk);
       FREE(ObjFunction, object);
       break;

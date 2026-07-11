@@ -1168,6 +1168,12 @@ void parseParameterList() {
   int dPatLen[MAX_DESTRUCTURE_VARS];
   int patternCount = 0;
   int varTotal = 0;
+  // Parameter names, index-aligned with param slots, recorded to build the
+  // function's paramNames table (for keyword arguments). A nameless entry marks
+  // a slot that cannot be named (a destructured param's synthetic local).
+  Token pNameTok[256];
+  bool pNameless[256];
+  int pNameCount = 0;
   if (!check(TOKEN_RIGHT_PAREN)) {
     do {
       // Rest parameter: ...name
@@ -1178,6 +1184,11 @@ void parseParameterList() {
           errorAtCurrent("Can't have more than 255 parameters.");
         }
         uint8_t constant = parseVariable("Expect rest parameter name.");
+        if (pNameCount < 256) {
+          pNameTok[pNameCount] = parser.previous;
+          pNameless[pNameCount] = false;
+          pNameCount++;
+        }
         defineVariable(constant);
         // Rest must be last parameter.
         break;
@@ -1210,6 +1221,11 @@ void parseParameterList() {
         dPatLen[patternCount] = n;
         patternCount++;
         varTotal += n;
+        if (pNameCount < 256) {
+          pNameTok[pNameCount] = syntheticToken("");
+          pNameless[pNameCount] = true; // destructured param has no callable name
+          pNameCount++;
+        }
         if (check(TOKEN_EQUAL)) {
           error("Destructured parameter can't have a default value.");
         }
@@ -1221,6 +1237,11 @@ void parseParameterList() {
         errorAtCurrent("Can't have more than 255 parameters.");
       }
       uint8_t constant = parseVariable("Expect parameter name.");
+      if (pNameCount < 256) {
+        pNameTok[pNameCount] = parser.previous;
+        pNameless[pNameCount] = false;
+        pNameCount++;
+      }
       defineVariable(constant);
 
       if (match(TOKEN_EQUAL)) {
@@ -1228,11 +1249,12 @@ void parseParameterList() {
           current->function->minArity = current->function->arity - 1;
           hasDefault = true;
         }
-        // Emit OP_DEFAULT_ARG <paramIndex> <jump placeholder>.
-        int paramIndex = current->function->arity - 1;
+        // Emit OP_DEFAULT_ARG <localSlot> <jump placeholder>. The operand is the
+        // parameter's local slot; the VM runs the default iff that slot is
+        // MISSING (unsupplied), which is what lets keyword calls skip middles.
         int slot = current->localCount - 1;
         emitByte(OP_DEFAULT_ARG);
-        emitByte((uint8_t)paramIndex);
+        emitByte((uint8_t)slot);
         // Emit jump placeholder (2 bytes) using same pattern as emitJump.
         emitByte(0xff);
         emitByte(0xff);
@@ -1270,6 +1292,22 @@ void parseParameterList() {
     } else {
       emitArrayPatternBindings(dPatSlot[p], &dNames[start], &dSkip[start],
                                dPatLen[p], false);
+    }
+  }
+
+  // Record parameter names for keyword-argument resolution. The array is
+  // assigned before the copyString loop and NULL-initialized so a GC triggered
+  // mid-build (via copyString) sees only rooted / NULL entries.
+  if (pNameCount > 0) {
+    ObjFunction* fn = current->function;
+    fn->paramNames = ALLOCATE(ObjString*, pNameCount);
+    fn->paramCount = pNameCount;
+    for (int i = 0; i < pNameCount; i++) fn->paramNames[i] = NULL;
+    for (int i = 0; i < pNameCount; i++) {
+      if (!pNameless[i]) {
+        fn->paramNames[i] =
+            copyString(pNameTok[i].start, pNameTok[i].length);
+      }
     }
   }
 }

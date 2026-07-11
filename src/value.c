@@ -38,6 +38,7 @@ void printValue(Value value) {
     case VAL_INT: printf("%" PRId64, AS_INT(value)); break;
     case VAL_DOUBLE: printf("%g", AS_DOUBLE(value)); break;
     case VAL_OBJ: printObject(value); break;
+    case VAL_MISSING: printf("<missing>"); break;
   }
 }
 

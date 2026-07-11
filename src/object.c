@@ -137,6 +137,8 @@ ObjFunction* newFunction() {
   function->upvalueCount = 0;
   function->hasRest = false;
   function->name = NULL;
+  function->paramNames = NULL;
+  function->paramCount = 0;
   initChunk(&function->chunk);
   return function;
 }

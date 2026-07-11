@@ -151,6 +151,11 @@ typedef struct {
   bool hasRest;
   Chunk chunk;
   ObjString* name;
+  // Parameter names, index-aligned with parameter slots (length == paramCount,
+  // which equals arity). Entries are NULL for unnameable slots (destructured
+  // params). Used to resolve keyword arguments at OP_CALL_KW.
+  ObjString** paramNames;
+  int paramCount;
 } ObjFunction;
 
 typedef Value (*NativeFn)(int argCount, Value* args);
