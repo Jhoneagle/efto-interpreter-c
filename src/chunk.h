@@ -73,6 +73,7 @@ typedef enum {
   OP_RIGHT_SHIFT,
   OP_MATCH_FAIL,
   OP_CALL_KW,
+  OP_TAIL_CALL,
 } OpCode;
 
 typedef struct {

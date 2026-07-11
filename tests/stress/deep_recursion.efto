@@ -1,15 +1,16 @@
-// Test deep recursion up to the FRAMES_MAX (64) limit.
+// Deep recursion and the FRAMES_MAX (64) frame limit.
 
-// A chain of 60 nested calls should succeed.
+// Tail-recursive countdown runs in constant stack (tail-call optimization),
+// so any depth succeeds.
 fun countdown(n) {
   if (n <= 0) return "done";
   return countdown(n - 1);
 }
 print countdown(60); // expect: done
 
-// 65 levels should overflow the 64-frame stack.
+// Non-tail recursion is still bounded by FRAMES_MAX; 65 levels overflow.
 fun overflow(n) {
   if (n <= 0) return 0;
-  return overflow(n - 1);
+  return 1 + overflow(n - 1); // not a tail call (result is used)
 }
 overflow(65); // expect runtime error: Stack overflow.

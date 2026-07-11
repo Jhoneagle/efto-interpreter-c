@@ -16,6 +16,7 @@ Compiler* current = NULL;
 ClassCompiler* currentClass = NULL;
 Loop* currentLoop = NULL;
 FinallyContext* currentFinally = NULL;
+int lastEmittedCall = -1;
 Chunk* compilingChunk;
 
 // Set of global names declared `const` (keys only; value is unused). Populated
@@ -195,6 +196,10 @@ ObjFunction* endCompiler() {
   // Restore the enclosing function's loop/finally contexts.
   currentLoop = current->enclosingLoop;
   currentFinally = current->enclosingFinally;
+
+  // A call offset recorded while compiling this function must not be mistaken
+  // for a tail call in the enclosing function's chunk.
+  lastEmittedCall = -1;
 
   current = current->enclosing;
   return function;
@@ -851,6 +856,9 @@ static void call(bool canAssign) {
     emitByte((uint8_t)namedCount);
   } else {
     emitBytes(OP_CALL, argCount);
+    // Remember where this plain call landed so returnStatement can promote it
+    // to a tail call if it turns out to be the last thing in a return.
+    lastEmittedCall = currentChunk()->count - 2;
   }
 }
 

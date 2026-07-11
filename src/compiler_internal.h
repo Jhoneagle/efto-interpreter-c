@@ -114,6 +114,10 @@ extern Compiler* current;
 extern ClassCompiler* currentClass;
 extern Loop* currentLoop;
 extern FinallyContext* currentFinally;
+// Chunk offset of the most recent plain OP_CALL (set by the call parselet, reset
+// per function in endCompiler), or -1. returnStatement uses it to detect a call
+// in tail position and rewrite it to OP_TAIL_CALL.
+extern int lastEmittedCall;
 
 /* Functions defined in compiler.c, used by compiler_stmt.c */
 Chunk* currentChunk(void);

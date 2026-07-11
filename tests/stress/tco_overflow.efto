@@ -1,0 +1,8 @@
+// [stress] Non-tail recursion is NOT optimized and still overflows the stack,
+// confirming only genuine tail calls reuse the frame.
+fun deep(n) {
+  if (n == 0) return 0;
+  return 1 + deep(n - 1); // result is used after the call -> not a tail call
+}
+print deep(100000);
+// expect runtime error: Stack overflow.

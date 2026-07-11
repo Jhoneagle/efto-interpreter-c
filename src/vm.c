@@ -556,68 +556,74 @@ static Value peek(int distance) {
   return vm.stackTop[-1 - distance];
 }
 
-static bool call(ObjClosure* closure, int argCount) {
+// Validate arity, collect a rest parameter, and pad missing optionals with the
+// MISSING sentinel — all in place on the stack above the callee. On success the
+// stack holds exactly `arity` argument slots above the callee, and *argCount is
+// set to `arity`. Returns false (after runtimeError) on an arity mismatch.
+// Shared by the normal call path and OP_TAIL_CALL's frame reuse.
+static bool bindCallArgs(ObjClosure* closure, int* argCount) {
   bool hasRest = closure->function->hasRest;
   int arity = closure->function->arity;
   int minArity = closure->function->minArity;
+  int count = *argCount;
 
   if (hasRest) {
-    // Rest functions accept minArity or more arguments.
-    if (argCount < minArity) {
+    if (count < minArity) {
       runtimeError("Expected at least %d arguments but got %d.",
-          minArity, argCount);
+          minArity, count);
       return false;
     }
 
-    // Collect excess args into a rest array.
     int restStart = arity - 1; // index of rest parameter
-    int restCount = (argCount > restStart) ? argCount - restStart : 0;
+    int restCount = (count > restStart) ? count - restStart : 0;
 
     ObjArray* restArray = newArray();
     push(OBJ_VAL(restArray)); // GC protect
 
-    // Copy rest args into the array. They are below our GC-protection push.
     // Stack: [..., callee, arg0, ..., argN-1, restArray]
-    // Rest args start at index restStart within args.
     for (int i = 0; i < restCount; i++) {
       writeValueArray(&restArray->elements,
-                      vm.stackTop[-1 - argCount + restStart + i]);
+                      vm.stackTop[-1 - count + restStart + i]);
     }
 
     pop(); // remove GC protection
-
-    // Remove restCount values and push the rest array in their place.
     vm.stackTop -= restCount;
     push(OBJ_VAL(restArray));
-    argCount = arity;
+    count = arity;
   } else {
-    if (argCount < minArity || argCount > arity) {
+    if (count < minArity || count > arity) {
       if (minArity == arity) {
-        runtimeError("Expected %d arguments but got %d.",
-            arity, argCount);
+        runtimeError("Expected %d arguments but got %d.", arity, count);
       } else {
         runtimeError("Expected %d to %d arguments but got %d.",
-            minArity, arity, argCount);
+            minArity, arity, count);
       }
       return false;
     }
   }
+
+  // Pad missing optionals with MISSING; each such slot has a matching
+  // OP_DEFAULT_ARG that fills it before any user code runs.
+  for (int i = count; i < arity; i++) {
+    push(MISSING_VAL);
+  }
+
+  *argCount = arity;
+  return true;
+}
+
+static bool call(ObjClosure* closure, int argCount) {
+  if (!bindCallArgs(closure, &argCount)) return false;
 
   if (vm.frameCount == FRAMES_MAX) {
     runtimeError("Stack overflow.");
     return false;
   }
 
-  // Pad missing optional args with the MISSING sentinel; each such slot has a
-  // matching OP_DEFAULT_ARG that fills it before any user code runs.
-  for (int i = argCount; i < arity; i++) {
-    push(MISSING_VAL);
-  }
-
   CallFrame* frame = &vm.frames[vm.frameCount++];
   frame->closure = closure;
   frame->ip = closure->function->chunk.code;
-  frame->slots = vm.stackTop - arity - 1;
+  frame->slots = vm.stackTop - argCount - 1;
   frame->argCount = argCount;
   return true;
 }
@@ -1864,6 +1870,51 @@ static InterpretResult run(int baseFrame) {
           if (ir != INTERPRET_OK) return ir;
         }
         frame = &vm.frames[vm.frameCount - 1];
+        break;
+      }
+      case OP_TAIL_CALL: {
+        // A call in tail position (return f(args);). For a plain closure or
+        // bound method we reuse the current frame instead of growing the stack,
+        // so deep tail recursion runs in O(1) frames. For any other callee
+        // (native, class ctor) we fall back to a normal call and let the
+        // trailing OP_RETURN return its result.
+        int argCount = READ_BYTE();
+        Value callee = peek(argCount);
+        ObjClosure* closure = NULL;
+        if (IS_CLOSURE(callee)) {
+          closure = AS_CLOSURE(callee);
+        } else if (IS_BOUND_METHOD(callee)) {
+          ObjBoundMethod* bound = AS_BOUND_METHOD(callee);
+          vm.stackTop[-argCount - 1] = bound->receiver; // becomes new slot 0
+          closure = bound->method;
+        } else {
+          // Not tail-optimizable: behave like OP_CALL; OP_RETURN follows.
+          if (!callValue(callee, argCount)) {
+            InterpretResult ir = postCallFailure(&frame, baseFrame);
+            if (ir != INTERPRET_OK) return ir;
+          }
+          frame = &vm.frames[vm.frameCount - 1];
+          break;
+        }
+
+        // Validate/bind args at the top of the stack (before disturbing the
+        // frame), so an arity error reports against the intact frame.
+        if (!bindCallArgs(closure, &argCount)) {
+          InterpretResult ir = postCallFailure(&frame, baseFrame);
+          if (ir != INTERPRET_OK) return ir;
+          break;
+        }
+
+        // Reuse the current frame: close its upvalues, slide callee+args down
+        // over the old locals, and re-point the frame at the new closure.
+        closeUpvalues(frame->slots);
+        Value* dest = frame->slots;
+        memmove(dest, vm.stackTop - argCount - 1,
+                sizeof(Value) * (argCount + 1));
+        vm.stackTop = dest + argCount + 1;
+        frame->closure = closure;
+        frame->ip = closure->function->chunk.code;
+        frame->argCount = argCount;
         break;
       }
       case OP_CALL_KW: {

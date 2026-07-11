@@ -1,0 +1,33 @@
+// [stress] Tail-call optimization (Commit 17).
+
+// Deep tail recursion must run in constant stack (far beyond FRAMES_MAX=64).
+fun count(n, acc) {
+  if (n == 0) return acc;
+  return count(n - 1, acc + 1); // tail position
+}
+print count(1000000, 0); // expect: 1000000
+
+// Mutual tail recursion.
+fun isEven(n) {
+  if (n == 0) return true;
+  return isOdd(n - 1);
+}
+fun isOdd(n) {
+  if (n == 0) return false;
+  return isEven(n - 1);
+}
+print isEven(100000); // expect: true
+print isOdd(100000);  // expect: false
+
+// Deep tail recursion through a bound-method value (a plain call of `self`,
+// which is `this.add`), exercising the OP_TAIL_CALL bound-method path.
+class Adder {
+  add(n, acc) {
+    if (n == 0) return acc;
+    var self = this.add;
+    return self(n - 1, acc + 1);
+  }
+}
+print Adder().add(500000, 0); // expect: 500000
+
+print "done"; // expect: done

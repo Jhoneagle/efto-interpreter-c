@@ -225,6 +225,8 @@ int disassembleInstruction(Chunk* chunk, int offset) {
       printf("%-16s pos=%d named=%d\n", "OP_CALL_KW", posCount, namedCount);
       return offset + 3;
     }
+    case OP_TAIL_CALL:
+      return byteInstruction("OP_TAIL_CALL", chunk, offset);
     default:
       printf("Unknown opcode %d\n", instruction);
       return offset + 1;

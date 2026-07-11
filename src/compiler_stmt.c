@@ -976,14 +976,25 @@ static void returnStatement() {
       error("Can't return a value from an initializer.");
     }
 
+    lastEmittedCall = -1; // track a plain call in tail position
     expression();
     consume(TOKEN_SEMICOLON, "Expect ';' after return value.");
 
     if (currentFinally != NULL) {
+      // Inside try/catch/finally a return must run the finally block first, so
+      // it is never a true tail call.
       emitBytes(OP_ENTER_FINALLY, COMPLETE_RETURN);
       currentFinally->enterJumps[currentFinally->enterJumpCount++] =
           emitJump(OP_JUMP);
     } else {
+      // If the return expression ended with a plain call (OP_CALL is the very
+      // last instruction emitted), promote it to a tail call so deep tail
+      // recursion runs in constant stack.
+      if (lastEmittedCall != -1 &&
+          lastEmittedCall == currentChunk()->count - 2 &&
+          currentChunk()->code[lastEmittedCall] == OP_CALL) {
+        currentChunk()->code[lastEmittedCall] = OP_TAIL_CALL;
+      }
       emitByte(OP_RETURN);
     }
   }
