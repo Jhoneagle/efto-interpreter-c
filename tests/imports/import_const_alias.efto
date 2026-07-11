@@ -1,0 +1,3 @@
+// An imported module name (alias form) is const and can't be reassigned.
+import attachments.helper as h;
+h = 5; // expect error: Cannot assign to const variable.

@@ -1,0 +1,20 @@
+// const with destructuring patterns (array and map), global and local.
+
+const [a, b, c] = [1, 2, 3];
+print a; // expect: 1
+print b; // expect: 2
+print c; // expect: 3
+
+const {name, age} = {"name": "Alice", "age": 30};
+print name; // expect: Alice
+print age;  // expect: 30
+
+const {name: who} = {"name": "Bob"};
+print who; // expect: Bob
+
+// Local-scope const destructuring.
+{
+  const [p, q] = [10, 20];
+  print p; // expect: 10
+  print q; // expect: 20
+}

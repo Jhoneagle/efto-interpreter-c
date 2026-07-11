@@ -1,0 +1,3 @@
+// Compound-assigning a const is a compile error.
+const total = 10;
+total += 5; // expect error: Cannot assign to const variable.

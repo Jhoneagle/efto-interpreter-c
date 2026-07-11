@@ -1,0 +1,3 @@
+// A selectively imported name is const and can't be reassigned.
+import { add } from attachments.helper;
+add = 3; // expect error: Cannot assign to const variable.

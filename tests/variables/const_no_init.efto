@@ -1,0 +1,2 @@
+// A const declaration must have an initializer.
+const x; // expect error: Const declaration requires an initializer.

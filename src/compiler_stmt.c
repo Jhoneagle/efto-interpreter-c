@@ -82,7 +82,7 @@ static void funDeclaration() {
   defineVariable(global);
 }
 
-static void arrayDestructure() {
+static void arrayDestructure(bool isConst) {
   advance(); // consume '['
 
   Token names[MAX_DESTRUCTURE_VARS];
@@ -130,6 +130,7 @@ static void arrayDestructure() {
       emitByte(OP_INDEX_GET);
       declareVariableByName(&names[i]);
       markInitialized();
+      if (isConst) current->locals[current->localCount - 1].isConst = true;
     }
   } else {
     // Global scope: DUP-based approach.
@@ -147,6 +148,7 @@ static void arrayDestructure() {
       emitConstant(INT_VAL(i));
       emitByte(OP_INDEX_GET);
       uint8_t nameConst = identifierConstant(&names[i]);
+      if (isConst) declareConstGlobal(&names[i]);
       emitBytes(OP_DEFINE_GLOBAL, nameConst);
     }
 
@@ -156,7 +158,7 @@ static void arrayDestructure() {
   }
 }
 
-static void mapDestructure() {
+static void mapDestructure(bool isConst) {
   advance(); // consume '{'
 
   Token keys[256];
@@ -199,6 +201,7 @@ static void mapDestructure() {
       emitByte(OP_INDEX_GET);
       declareVariableByName(&varNames[i]);
       markInitialized();
+      if (isConst) current->locals[current->localCount - 1].isConst = true;
     }
   } else {
     for (int i = 0; i < count; i++) {
@@ -208,6 +211,7 @@ static void mapDestructure() {
       emitConstant(OBJ_VAL(copyString(keys[i].start, keys[i].length)));
       emitByte(OP_INDEX_GET);
       uint8_t nameConst = identifierConstant(&varNames[i]);
+      if (isConst) declareConstGlobal(&varNames[i]);
       emitBytes(OP_DEFINE_GLOBAL, nameConst);
     }
   }
@@ -215,11 +219,11 @@ static void mapDestructure() {
 
 static void varDeclaration() {
   if (check(TOKEN_LEFT_BRACKET)) {
-    arrayDestructure();
+    arrayDestructure(false);
     return;
   }
   if (check(TOKEN_LEFT_BRACE)) {
-    mapDestructure();
+    mapDestructure(false);
     return;
   }
 
@@ -233,6 +237,37 @@ static void varDeclaration() {
   consume(TOKEN_SEMICOLON,
           "Expect ';' after variable declaration.");
 
+  defineVariable(global);
+}
+
+static void constDeclaration() {
+  // Destructuring forms: const [a, b] = ...; / const {x, y} = ...;
+  if (check(TOKEN_LEFT_BRACKET)) {
+    arrayDestructure(true);
+    return;
+  }
+  if (check(TOKEN_LEFT_BRACE)) {
+    mapDestructure(true);
+    return;
+  }
+
+  uint8_t global = parseVariable("Expect variable name.");
+  Token nameToken = parser.previous; // capture before expression() moves it
+  bool isLocal = current->scopeDepth > 0;
+
+  if (isLocal) {
+    // The local was just declared by parseVariable (depth -1, uninitialized).
+    current->locals[current->localCount - 1].isConst = true;
+  }
+
+  // Unlike `var`, a const binding must be initialized.
+  consume(TOKEN_EQUAL, "Const declaration requires an initializer.");
+  expression();
+  consume(TOKEN_SEMICOLON, "Expect ';' after const declaration.");
+
+  if (!isLocal) {
+    declareConstGlobal(&nameToken);
+  }
   defineVariable(global);
 }
 
@@ -1173,6 +1208,7 @@ static void synchronize() {
       case TOKEN_CLASS:
       case TOKEN_FUN:
       case TOKEN_VAR:
+      case TOKEN_CONST:
       case TOKEN_FOR:
       case TOKEN_IF:
       case TOKEN_WHILE:
@@ -1204,6 +1240,7 @@ static void importDeclaration() {
   if (match(TOKEN_LEFT_BRACE)) {
     // Form 3: import { name1, name2 } from module;
     uint8_t names[MAX_IMPORT_NAMES];
+    Token nameToks[MAX_IMPORT_NAMES];
     int nameCount = 0;
 
     do {
@@ -1212,6 +1249,7 @@ static void importDeclaration() {
         error("Too many names in import.");
         return;
       }
+      nameToks[nameCount] = parser.previous;
       names[nameCount++] = identifierConstant(&parser.previous);
     } while (match(TOKEN_COMMA));
 
@@ -1252,6 +1290,7 @@ static void importDeclaration() {
         emitBytes(OP_DUP, 0);
       }
       emitBytes(OP_GET_PROPERTY, names[i]);
+      declareConstGlobal(&nameToks[i]);
       emitBytes(OP_DEFINE_GLOBAL, names[i]);
     }
   } else {
@@ -1297,6 +1336,7 @@ static void importDeclaration() {
 
     uint8_t nameConst = makeConstant(
         OBJ_VAL(copyString(nameStart, nameLen)));
+    declareConstGlobalName(nameStart, nameLen);
     emitBytes(OP_DEFINE_GLOBAL, nameConst);
   }
 }
@@ -1308,6 +1348,8 @@ void declaration() {
     funDeclaration();
   } else if (match(TOKEN_VAR)) {
     varDeclaration();
+  } else if (match(TOKEN_CONST)) {
+    constDeclaration();
   } else if (match(TOKEN_IMPORT)) {
     importDeclaration();
   } else {

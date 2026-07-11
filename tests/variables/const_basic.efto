@@ -1,0 +1,32 @@
+// const bindings: read, use in expressions, local scope, shadowing.
+
+const PI = 3;
+print PI;              // expect: 3
+print PI + 1;          // expect: 4
+
+const name = "efto";
+print "hello ${name}"; // expect: hello efto
+
+// const in a local scope.
+{
+  const k = 10;
+  print k;             // expect: 10
+}
+
+// A new scope may shadow an outer const with its own binding.
+const x = 1;
+{
+  const x = 2;
+  print x;             // expect: 2
+}
+print x;               // expect: 1
+
+// const referenced (read) from inside a closure works.
+const base = 100;
+fun addBase(n) { return base + n; }
+print addBase(5);      // expect: 105
+
+// A later var of a different name is unaffected and remains mutable.
+var counter = 0;
+counter = counter + 1;
+print counter;         // expect: 1

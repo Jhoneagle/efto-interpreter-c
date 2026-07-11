@@ -5,6 +5,7 @@
 
 #include "compiler_internal.h"
 #include "memory.h"
+#include "vm.h"
 
 #ifdef DEBUG_PRINT_CODE
 #include "debug.h"
@@ -16,6 +17,12 @@ ClassCompiler* currentClass = NULL;
 Loop* currentLoop = NULL;
 FinallyContext* currentFinally = NULL;
 Chunk* compilingChunk;
+
+// Set of global names declared `const` (keys only; value is unused). Populated
+// during a single compile() pass and consulted by namedVariable() to reject
+// reassignment. Global name→constant-index is not 1:1, so we key by the interned
+// name string rather than by constant index.
+Table constGlobals;
 
 Chunk* currentChunk() {
   return &current->function->chunk;
@@ -163,6 +170,7 @@ void initCompiler(Compiler* compiler, FunctionType type) {
   Local* local = &current->locals[current->localCount++];
   local->depth = 0;
   local->isCaptured = false;
+  local->isConst = false;
 
   if (type != TYPE_FUNCTION && type != TYPE_ARROW) {
     local->name.start = "this";
@@ -446,6 +454,25 @@ uint8_t identifierConstant(Token* name) {
                                          name->length)));
 }
 
+void declareConstGlobalName(const char* chars, int length) {
+  ObjString* str = copyString(chars, length);
+  // Protect the (possibly freshly allocated) name across tableSet's own
+  // allocation, which can trigger a GC that would otherwise sweep it.
+  push(OBJ_VAL(str));
+  tableSet(&constGlobals, str, BOOL_VAL(true));
+  pop();
+}
+
+void declareConstGlobal(Token* name) {
+  declareConstGlobalName(name->start, name->length);
+}
+
+static bool isConstGlobal(Token* name) {
+  ObjString* str = copyString(name->start, name->length);
+  Value unused;
+  return tableGet(&constGlobals, str, &unused);
+}
+
 bool identifiersEqual(Token* a, Token* b) {
   if (a->length != b->length) return false;
   return memcmp(a->start, b->start, a->length) == 0;
@@ -466,7 +493,7 @@ static int resolveLocal(Compiler* compiler, Token* name) {
 }
 
 static int addUpvalue(Compiler* compiler, uint8_t index,
-                      bool isLocal) {
+                      bool isLocal, bool isConst) {
   int upvalueCount = compiler->function->upvalueCount;
 
   for (int i = 0; i < upvalueCount; i++) {
@@ -483,6 +510,7 @@ static int addUpvalue(Compiler* compiler, uint8_t index,
 
   compiler->upvalues[upvalueCount].isLocal = isLocal;
   compiler->upvalues[upvalueCount].index = index;
+  compiler->upvalues[upvalueCount].isConst = isConst;
   return compiler->function->upvalueCount++;
 }
 
@@ -492,12 +520,14 @@ static int resolveUpvalue(Compiler* compiler, Token* name) {
   int local = resolveLocal(compiler->enclosing, name);
   if (local != -1) {
     compiler->enclosing->locals[local].isCaptured = true;
-    return addUpvalue(compiler, (uint8_t)local, true);
+    return addUpvalue(compiler, (uint8_t)local, true,
+                      compiler->enclosing->locals[local].isConst);
   }
 
   int upvalue = resolveUpvalue(compiler->enclosing, name);
   if (upvalue != -1) {
-    return addUpvalue(compiler, (uint8_t)upvalue, false);
+    return addUpvalue(compiler, (uint8_t)upvalue, false,
+                      compiler->enclosing->upvalues[upvalue].isConst);
   }
 
   return -1;
@@ -530,23 +560,29 @@ uint8_t compoundOp(TokenType type) {
 
 void namedVariable(Token name, bool canAssign) {
   uint8_t getOp, setOp;
+  bool isConst = false;
   int arg = resolveLocal(current, &name);
   if (arg != -1) {
     getOp = OP_GET_LOCAL;
     setOp = OP_SET_LOCAL;
+    isConst = current->locals[arg].isConst;
   } else if ((arg = resolveUpvalue(current, &name)) != -1) {
     getOp = OP_GET_UPVALUE;
     setOp = OP_SET_UPVALUE;
+    isConst = current->upvalues[arg].isConst;
   } else {
     arg = identifierConstant(&name);
     getOp = OP_GET_GLOBAL;
     setOp = OP_SET_GLOBAL;
+    isConst = isConstGlobal(&name);
   }
 
   if (canAssign && match(TOKEN_EQUAL)) {
+    if (isConst) error("Cannot assign to const variable.");
     expression();
     emitBytes(setOp, (uint8_t)arg);
   } else if (canAssign && isCompoundAssign(parser.current.type)) {
+    if (isConst) error("Cannot assign to const variable.");
     TokenType opType = parser.current.type;
     advance();
     emitBytes(getOp, (uint8_t)arg);
@@ -932,6 +968,7 @@ void addLocal(Token name) {
   local->name = name;
   local->depth = -1;
   local->isCaptured = false;
+  local->isConst = false;
   // local->depth = current->scopeDepth;
 }
 
@@ -1085,6 +1122,8 @@ ObjFunction* compile(const char* source) {
   Compiler compiler;
   initCompiler(&compiler, TYPE_SCRIPT);
 
+  initTable(&constGlobals);
+
   parser.hadError = false;
   parser.panicMode = false;
 
@@ -1095,6 +1134,7 @@ ObjFunction* compile(const char* source) {
   }
 
   ObjFunction* function = endCompiler();
+  freeTable(&constGlobals);
   return parser.hadError ? NULL : function;
 }
 
@@ -1104,4 +1144,7 @@ void markCompilerRoots() {
     markObject((Obj*)compiler->function);
     compiler = compiler->enclosing;
   }
+  // Keep const-global name keys alive during compilation. Safe outside a
+  // compile() pass too: freeTable() leaves the table zeroed, so this is a no-op.
+  markTable(&constGlobals);
 }

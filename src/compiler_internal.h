@@ -51,11 +51,13 @@ typedef struct {
   Token name;
   int depth;
   bool isCaptured;
+  bool isConst;
 } Local;
 
 typedef struct {
   uint8_t index;
   bool isLocal;
+  bool isConst;
 } Upvalue;
 
 typedef enum {
@@ -143,6 +145,8 @@ uint8_t parseVariable(const char* errorMessage);
 void markInitialized(void);
 void defineVariable(uint8_t global);
 void namedVariable(Token name, bool canAssign);
+void declareConstGlobal(Token* name);
+void declareConstGlobalName(const char* chars, int length);
 Token syntheticToken(const char* text);
 void emitStringConstant(const char* text, int len);
 void expression(void);

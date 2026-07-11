@@ -1,0 +1,8 @@
+// Reassigning a local const (and one captured as an upvalue) is a compile error.
+fun outer() {
+  const c = 1;
+  c = 2;              // expect error: Cannot assign to const variable.
+  fun inner() {
+    c = 3;            // expect error: Cannot assign to const variable.
+  }
+}

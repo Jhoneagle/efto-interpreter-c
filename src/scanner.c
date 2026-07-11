@@ -153,7 +153,16 @@ static TokenType identifierType() {
               }
             }
             break;
-          case 'o': return checkKeyword(2, 6, "ntinue", TOKEN_CONTINUE);
+          case 'o':
+            // const and continue share the prefix "con"; branch at index 3.
+            if (scanner.current - scanner.start > 3 &&
+                scanner.start[2] == 'n') {
+              switch (scanner.start[3]) {
+                case 's': return checkKeyword(4, 1, "t", TOKEN_CONST);
+                case 't': return checkKeyword(4, 4, "inue", TOKEN_CONTINUE);
+              }
+            }
+            break;
         }
       }
       break;
