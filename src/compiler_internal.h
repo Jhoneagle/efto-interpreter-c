@@ -136,6 +136,7 @@ void initCompiler(Compiler* compiler, FunctionType type);
 ObjFunction* endCompiler(void);
 void beginScope(void);
 void endScope(void);
+void endScopeKeepingTop(void);
 uint8_t identifierConstant(Token* name);
 bool identifiersEqual(Token* a, Token* b);
 void addLocal(Token name);
@@ -161,5 +162,6 @@ void compileFunction(FunctionType type);
 /* Functions defined in compiler_stmt.c, used by compiler.c */
 void declaration(void);
 void statement(void);
+void matchExpression(bool canAssign);
 
 #endif

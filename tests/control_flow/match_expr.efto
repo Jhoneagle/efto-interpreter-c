@@ -1,0 +1,97 @@
+// match as an expression: arms yield values; the construct evaluates to the
+// matched arm's value.
+//
+// Supported in "clean-stack" positions: variable initializers, return values,
+// print arguments, and arm bodies (so nested match expressions work). It uses a
+// hidden local for the scrutinee, so embedding it inside a larger expression
+// that leaves temporaries on the stack (e.g. `"n=" + match(...)`) is not
+// supported.
+import { ValueError, Error } from error;
+
+// Value arms with a wildcard.
+fun name(n) {
+  return match (n) {
+    0 => "zero",
+    1 => "one",
+    2 => "two",
+    _ => "many",
+  };
+}
+print name(0); // expect: zero
+print name(1); // expect: one
+print name(2); // expect: two
+print name(7); // expect: many
+
+// Guard arms (guard references an in-scope variable with a wildcard pattern).
+fun sign(n) {
+  return match (n) {
+    _ if n < 0 => "neg",
+    0 => "zero",
+    _ => "pos",
+  };
+}
+print sign(-4); // expect: neg
+print sign(0);  // expect: zero
+print sign(9);  // expect: pos
+
+// Array-binding arm whose body uses the bound variables.
+var total = match ([10, 20]) {
+  [a, b] => a + b,
+  _ => 0,
+};
+print total; // expect: 30
+
+// Guard with a binding pattern.
+print match ([3, 4]) {
+  [x, y] if x > 5 => "big",
+  [x, y] if x <= 5 => x + y,
+  _ => -1,
+}; // expect: 7
+
+// Map-binding arm.
+var person = {"name": "Alice", "age": 30};
+print match (person) {
+  {name, age} if age >= 18 => name,
+  _ => "minor",
+}; // expect: Alice
+
+// Type-pattern binding.
+print match (42) {
+  string s => "str",
+  int i => i + 1,
+  _ => "other",
+}; // expect: 43
+
+// Trailing comma is allowed (used above); also works without one.
+print match (5) { 5 => "five", _ => "no" }; // expect: five
+
+// Nested match expressions.
+print match (1) {
+  1 => match (2) { 2 => "one-two", _ => "?" },
+  _ => "no",
+}; // expect: one-two
+
+// A match expression as a return value flows through normally.
+fun classify(v) {
+  return match (v) {
+    true => "yes",
+    false => "no",
+    _ => "maybe",
+  };
+}
+print classify(true);  // expect: yes
+print classify(false); // expect: no
+print classify(nil);   // expect: maybe
+
+// No matching arm raises a catchable ValueError.
+try {
+  var y = match (99) { 1 => "a", 2 => "b" };
+  print y;
+} catch (ValueError e) {
+  print "caught";      // expect: caught
+  print e is ValueError; // expect: true
+  print e is Error;    // expect: true
+}
+
+// Control continues normally after a caught no-match.
+print "done"; // expect: done

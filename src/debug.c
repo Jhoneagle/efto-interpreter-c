@@ -217,6 +217,8 @@ int disassembleInstruction(Chunk* chunk, int offset) {
       return simpleInstruction("OP_LEFT_SHIFT", offset);
     case OP_RIGHT_SHIFT:
       return simpleInstruction("OP_RIGHT_SHIFT", offset);
+    case OP_MATCH_FAIL:
+      return simpleInstruction("OP_MATCH_FAIL", offset);
     default:
       printf("Unknown opcode %d\n", instruction);
       return offset + 1;

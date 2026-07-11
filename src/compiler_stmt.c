@@ -632,6 +632,257 @@ static bool isWildcardPattern() {
          parser.current.start[0] == '_';
 }
 
+// Compile one match pattern: emit its test against the scrutinee (recording
+// jump offsets for the no-match path into skipJumps), open a binding scope for
+// patterns that bind variables, and report whether it is a wildcard. Shared by
+// the statement and expression forms so both accept identical pattern syntax.
+static void compileMatchPattern(int scrutineeSlot, int* skipJumps,
+                                int* skipCount, bool* isWild,
+                                bool* hasBindingScope) {
+  if (isWildcardPattern()) {
+    // Wildcard pattern: always matches.
+    advance(); // consume _
+    *isWild = true;
+  } else if (check(TOKEN_LEFT_BRACKET)) {
+    // Array destructuring pattern: [a, b, c]
+    advance(); // consume [
+
+    // Parse variable names.
+    Token names[MAX_DESTRUCTURE_VARS];
+    int nameCount = 0;
+    if (!check(TOKEN_RIGHT_BRACKET)) {
+      do {
+        consume(TOKEN_IDENTIFIER, "Expect variable name in array pattern.");
+        names[nameCount++] = parser.previous;
+        if (nameCount > MAX_DESTRUCTURE_VARS) {
+          error("Too many variables in array pattern.");
+        }
+      } while (match(TOKEN_COMMA));
+    }
+    consume(TOKEN_RIGHT_BRACKET, "Expect ']' after array pattern.");
+
+    // Type check: typeof scrutinee == "array"
+    emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+    emitByte(OP_TYPEOF);
+    emitConstant(OBJ_VAL(copyString("array", 5)));
+    emitByte(OP_EQUAL);
+    skipJumps[(*skipCount)++] = emitJump(OP_JUMP_IF_FALSE);
+    emitByte(OP_POP); // pop true
+
+    // Length check: scrutinee.length == nameCount
+    emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+    Token lenTok = syntheticToken("length");
+    uint8_t lenConst = identifierConstant(&lenTok);
+    emitBytes(OP_GET_PROPERTY, lenConst);
+    emitConstant(INT_VAL((int64_t)nameCount));
+    emitByte(OP_EQUAL);
+    skipJumps[(*skipCount)++] = emitJump(OP_JUMP_IF_FALSE);
+    emitByte(OP_POP); // pop true
+
+    // Bind variables in a new scope.
+    beginScope();
+    *hasBindingScope = true;
+    for (int i = 0; i < nameCount; i++) {
+      emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+      emitConstant(INT_VAL((int64_t)i));
+      emitByte(OP_INDEX_GET);
+      addLocal(names[i]);
+      markInitialized();
+    }
+  } else if (check(TOKEN_LEFT_BRACE)) {
+    // Map destructuring pattern: {key: var} or {key}
+    advance(); // consume {
+
+    Token keys[MAX_DESTRUCTURE_VARS];
+    Token varNames[MAX_DESTRUCTURE_VARS];
+    int keyCount = 0;
+    if (!check(TOKEN_RIGHT_BRACE)) {
+      do {
+        consume(TOKEN_IDENTIFIER, "Expect key name in map pattern.");
+        keys[keyCount] = parser.previous;
+        if (match(TOKEN_COLON)) {
+          consume(TOKEN_IDENTIFIER, "Expect variable name after ':'.");
+          varNames[keyCount] = parser.previous;
+        } else {
+          varNames[keyCount] = keys[keyCount];
+        }
+        keyCount++;
+        if (keyCount > MAX_DESTRUCTURE_VARS) {
+          error("Too many keys in map pattern.");
+        }
+      } while (match(TOKEN_COMMA));
+    }
+    consume(TOKEN_RIGHT_BRACE, "Expect '}' after map pattern.");
+
+    // Type check: typeof scrutinee == "map"
+    emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+    emitByte(OP_TYPEOF);
+    emitConstant(OBJ_VAL(copyString("map", 3)));
+    emitByte(OP_EQUAL);
+    skipJumps[(*skipCount)++] = emitJump(OP_JUMP_IF_FALSE);
+    emitByte(OP_POP); // pop true
+
+    // First: check all keys exist (before any bindings).
+    for (int i = 0; i < keyCount; i++) {
+      emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+      Token hasTok = syntheticToken("containsKey");
+      uint8_t hasConst = identifierConstant(&hasTok);
+      emitStringConstant(keys[i].start, keys[i].length);
+      emitBytes(OP_INVOKE, hasConst);
+      emitByte(1);
+      skipJumps[(*skipCount)++] = emitJump(OP_JUMP_IF_FALSE);
+      emitByte(OP_POP); // pop true
+    }
+
+    // Then: bind all variables in a scope.
+    beginScope();
+    *hasBindingScope = true;
+    for (int i = 0; i < keyCount; i++) {
+      emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+      emitStringConstant(keys[i].start, keys[i].length);
+      emitByte(OP_INDEX_GET);
+      addLocal(varNames[i]);
+      markInitialized();
+    }
+  } else if (check(TOKEN_IDENTIFIER)) {
+    // Could be type pattern (TypeName binding =>) or literal.
+    ScannerState savedScan = saveScannerState();
+    Token savedCurrent = parser.current;
+    Token savedPrevious = parser.previous;
+
+    Token typeName = parser.current;
+    advance(); // consume potential type name
+
+    if (check(TOKEN_IDENTIFIER)) {
+      // Confirmed: TypeName binding pattern.
+      Token bindingName = parser.current;
+      advance();
+
+      // Push scrutinee, push type/class, check.
+      emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+      namedVariable(typeName, false);
+      emitByte(OP_CHECK_TYPE);
+      skipJumps[(*skipCount)++] = emitJump(OP_JUMP_IF_FALSE);
+      emitByte(OP_POP); // pop true
+
+      // Bind variable.
+      beginScope();
+      *hasBindingScope = true;
+      emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+      addLocal(bindingName);
+      markInitialized();
+    } else {
+      // Not a type pattern — restore and parse as literal.
+      parser.current = savedCurrent;
+      parser.previous = savedPrevious;
+      restoreScannerState(savedScan);
+
+      emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+      expression();
+      emitByte(OP_EQUAL);
+      skipJumps[(*skipCount)++] = emitJump(OP_JUMP_IF_FALSE);
+      emitByte(OP_POP); // pop true
+    }
+  } else {
+    // Literal pattern: number, string, true, false, nil.
+    emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
+    expression();
+    emitByte(OP_EQUAL);
+    skipJumps[(*skipCount)++] = emitJump(OP_JUMP_IF_FALSE);
+    emitByte(OP_POP); // pop true
+  }
+}
+
+// Compile a single arm: pattern, optional guard, '=>', body, and the
+// skip/guard-fail patching. When isExpr is true the body is an expression whose
+// value is kept on the stack (via endScopeKeepingTop); otherwise it is a
+// statement. Records the arm's end-jump so the caller can patch it to the match
+// exit, and sets *hasWildcard for the unreachable-arm check.
+static void compileMatchArm(int scrutineeSlot, bool isExpr,
+                            int* armEnds, int* armCount, bool* hasWildcard) {
+  bool isWild = false;
+  bool hasBindingScope = false;
+  int skipJumps[MAX_DESTRUCTURE_VARS + 2];
+  int skipCount = 0;
+
+  compileMatchPattern(scrutineeSlot, skipJumps, &skipCount, &isWild,
+                      &hasBindingScope);
+
+  // Guard clause: pattern if condition => body
+  bool hasGuard = match(TOKEN_IF);
+  int guardFailJump = -1;
+  int bindingCount = 0;
+
+  if (hasGuard) {
+    expression();
+    guardFailJump = emitJump(OP_JUMP_IF_FALSE);
+    emitByte(OP_POP); // pop guard true (success path)
+  }
+
+  consume(TOKEN_ARROW, "Expect '=>' after match pattern.");
+
+  // Compile arm body: an expression (value kept) or a statement.
+  if (isExpr) {
+    expression();
+  } else {
+    statement();
+  }
+
+  // Close binding scope (success path), preserving the arm result for the
+  // expression form.
+  if (hasBindingScope) {
+    // Count bindings BEFORE the scope close destroys localCount.
+    for (int i = current->localCount - 1; i >= 0; i--) {
+      if (current->locals[i].depth > current->scopeDepth - 1)
+        bindingCount++;
+      else break;
+    }
+    if (isExpr) {
+      endScopeKeepingTop();
+    } else {
+      endScope();
+    }
+  }
+
+  // End arm: jump to end of match.
+  if (*armCount < MAX_SWITCH_CASES) {
+    armEnds[(*armCount)++] = emitJump(OP_JUMP);
+  } else {
+    error("Too many arms in match.");
+  }
+
+  // Guard failure handling (guard fails before the body runs, so no arm result
+  // is involved — identical for both forms).
+  if (hasGuard) {
+    if (hasBindingScope) {
+      // Case B: binding + guard failure.
+      // Stack: [..., bound1, ..., boundN, guard_false]
+      patchJump(guardFailJump);
+      emitByte(OP_POP); // pop guard false
+      for (int i = 0; i < bindingCount; i++) {
+        emitByte(OP_POP); // pop each bound variable
+      }
+      emitByte(OP_FALSE); // push false for shared skip-pop
+      skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
+    } else {
+      // Case A: no bindings — guard false already on stack.
+      skipJumps[skipCount++] = guardFailJump;
+    }
+  }
+
+  // Patch all skip jumps to the same target with a single POP.
+  if (skipCount > 0) {
+    for (int i = 0; i < skipCount; i++) {
+      patchJump(skipJumps[i]);
+    }
+    emitByte(OP_POP); // pop the false value
+  }
+
+  if (isWild && !hasGuard) {
+    *hasWildcard = true;
+  }
+}
+
 static void matchStatement() {
   consume(TOKEN_LEFT_PAREN, "Expect '(' after 'match'.");
 
@@ -653,231 +904,7 @@ static void matchStatement() {
     if (hasWildcard) {
       error("Unreachable pattern after wildcard '_'.");
     }
-
-    bool isWild = false;
-    bool hasBindingScope = false;
-    int skipJumps[MAX_DESTRUCTURE_VARS + 2];
-    int skipCount = 0;
-
-    if (isWildcardPattern()) {
-      // Wildcard pattern: always matches.
-      advance(); // consume _
-      isWild = true;
-    } else if (check(TOKEN_LEFT_BRACKET)) {
-      // Array destructuring pattern: [a, b, c]
-      advance(); // consume [
-
-      // Parse variable names.
-      Token names[MAX_DESTRUCTURE_VARS];
-      int nameCount = 0;
-      if (!check(TOKEN_RIGHT_BRACKET)) {
-        do {
-          consume(TOKEN_IDENTIFIER, "Expect variable name in array pattern.");
-          names[nameCount++] = parser.previous;
-          if (nameCount > MAX_DESTRUCTURE_VARS) {
-            error("Too many variables in array pattern.");
-          }
-        } while (match(TOKEN_COMMA));
-      }
-      consume(TOKEN_RIGHT_BRACKET, "Expect ']' after array pattern.");
-
-      // Type check: typeof scrutinee == "array"
-      emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
-      emitByte(OP_TYPEOF);
-      emitConstant(OBJ_VAL(copyString("array", 5)));
-      emitByte(OP_EQUAL);
-      skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
-      emitByte(OP_POP); // pop true
-
-      // Length check: scrutinee.length == nameCount
-      emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
-      Token lenTok = syntheticToken("length");
-      uint8_t lenConst = identifierConstant(&lenTok);
-      emitBytes(OP_GET_PROPERTY, lenConst);
-      emitConstant(INT_VAL((int64_t)nameCount));
-      emitByte(OP_EQUAL);
-      skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
-      emitByte(OP_POP); // pop true
-
-      // Bind variables in a new scope.
-      beginScope();
-      hasBindingScope = true;
-      for (int i = 0; i < nameCount; i++) {
-        emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
-        emitConstant(INT_VAL((int64_t)i));
-        emitByte(OP_INDEX_GET);
-        addLocal(names[i]);
-        markInitialized();
-      }
-    } else if (check(TOKEN_LEFT_BRACE)) {
-      // Map destructuring pattern: {key: var} or {key}
-      advance(); // consume {
-
-      Token keys[MAX_DESTRUCTURE_VARS];
-      Token varNames[MAX_DESTRUCTURE_VARS];
-      int keyCount = 0;
-      if (!check(TOKEN_RIGHT_BRACE)) {
-        do {
-          consume(TOKEN_IDENTIFIER, "Expect key name in map pattern.");
-          keys[keyCount] = parser.previous;
-          if (match(TOKEN_COLON)) {
-            consume(TOKEN_IDENTIFIER, "Expect variable name after ':'.");
-            varNames[keyCount] = parser.previous;
-          } else {
-            varNames[keyCount] = keys[keyCount];
-          }
-          keyCount++;
-          if (keyCount > MAX_DESTRUCTURE_VARS) {
-            error("Too many keys in map pattern.");
-          }
-        } while (match(TOKEN_COMMA));
-      }
-      consume(TOKEN_RIGHT_BRACE, "Expect '}' after map pattern.");
-
-      // Type check: typeof scrutinee == "map"
-      emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
-      emitByte(OP_TYPEOF);
-      emitConstant(OBJ_VAL(copyString("map", 3)));
-      emitByte(OP_EQUAL);
-      skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
-      emitByte(OP_POP); // pop true
-
-      // First: check all keys exist (before any bindings).
-      for (int i = 0; i < keyCount; i++) {
-        emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
-        Token hasTok = syntheticToken("containsKey");
-        uint8_t hasConst = identifierConstant(&hasTok);
-        emitStringConstant(keys[i].start, keys[i].length);
-        emitBytes(OP_INVOKE, hasConst);
-        emitByte(1);
-        skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
-        emitByte(OP_POP); // pop true
-      }
-
-      // Then: bind all variables in a scope.
-      beginScope();
-      hasBindingScope = true;
-      for (int i = 0; i < keyCount; i++) {
-        emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
-        emitStringConstant(keys[i].start, keys[i].length);
-        emitByte(OP_INDEX_GET);
-        addLocal(varNames[i]);
-        markInitialized();
-      }
-    } else if (check(TOKEN_IDENTIFIER)) {
-      // Could be type pattern (TypeName binding =>) or literal.
-      ScannerState savedScan = saveScannerState();
-      Token savedCurrent = parser.current;
-      Token savedPrevious = parser.previous;
-
-      Token typeName = parser.current;
-      advance(); // consume potential type name
-
-      if (check(TOKEN_IDENTIFIER)) {
-        // Confirmed: TypeName binding pattern.
-        Token bindingName = parser.current;
-        advance();
-
-        // Push scrutinee, push type/class, check.
-        emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
-        namedVariable(typeName, false);
-        emitByte(OP_CHECK_TYPE);
-        skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
-        emitByte(OP_POP); // pop true
-
-        // Bind variable.
-        beginScope();
-        hasBindingScope = true;
-        emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
-        addLocal(bindingName);
-        markInitialized();
-      } else {
-        // Not a type pattern — restore and parse as literal.
-        parser.current = savedCurrent;
-        parser.previous = savedPrevious;
-        restoreScannerState(savedScan);
-
-        emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
-        expression();
-        emitByte(OP_EQUAL);
-        skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
-        emitByte(OP_POP); // pop true
-      }
-    } else {
-      // Literal pattern: number, string, true, false, nil.
-      emitBytes(OP_GET_LOCAL, (uint8_t)scrutineeSlot);
-      expression();
-      emitByte(OP_EQUAL);
-      skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
-      emitByte(OP_POP); // pop true
-    }
-
-    // Guard clause: pattern if condition => body
-    bool hasGuard = match(TOKEN_IF);
-    int guardFailJump = -1;
-    int bindingCount = 0;
-
-    if (hasGuard) {
-      expression();
-      guardFailJump = emitJump(OP_JUMP_IF_FALSE);
-      emitByte(OP_POP); // pop guard true (success path)
-    }
-
-    // Consume => separator.
-    consume(TOKEN_ARROW, "Expect '=>' after match pattern.");
-
-    // Compile arm body.
-    statement();
-
-    // Close binding scope (success path).
-    if (hasBindingScope) {
-      // Count bindings BEFORE endScope destroys localCount.
-      for (int i = current->localCount - 1; i >= 0; i--) {
-        if (current->locals[i].depth > current->scopeDepth - 1)
-          bindingCount++;
-        else break;
-      }
-      endScope();
-    }
-
-    // End arm: jump to end of match.
-    if (armCount < MAX_SWITCH_CASES) {
-      armEnds[armCount++] = emitJump(OP_JUMP);
-    } else {
-      error("Too many arms in match statement.");
-    }
-
-    // Guard failure handling.
-    if (hasGuard) {
-      if (hasBindingScope) {
-        // Case B: binding + guard failure.
-        // Stack: [..., bound1, ..., boundN, guard_false]
-        patchJump(guardFailJump);
-        emitByte(OP_POP); // pop guard false
-        for (int i = 0; i < bindingCount; i++) {
-          emitByte(OP_POP); // pop each bound variable
-        }
-        emitByte(OP_FALSE); // push false for shared skip-pop
-        skipJumps[skipCount++] = emitJump(OP_JUMP_IF_FALSE);
-      } else {
-        // Case A: no bindings — guard false already on stack.
-        // Add guardFailJump to skipJumps; patchJump will forward it
-        // to the shared OP_POP target.
-        skipJumps[skipCount++] = guardFailJump;
-      }
-    }
-
-    // Patch all skip jumps to the same target with a single POP.
-    if (skipCount > 0) {
-      for (int i = 0; i < skipCount; i++) {
-        patchJump(skipJumps[i]);
-      }
-      emitByte(OP_POP); // pop the false value
-    }
-
-    if (isWild && !hasGuard) {
-      hasWildcard = true;
-    }
+    compileMatchArm(scrutineeSlot, false, armEnds, &armCount, &hasWildcard);
   }
 
   consume(TOKEN_RIGHT_BRACE, "Expect '}' after match arms.");
@@ -888,6 +915,48 @@ static void matchStatement() {
   }
 
   endScope();
+}
+
+// Expression form: match (expr) { pattern (if guard)? => expr, ... }. Each arm
+// yields an expression; the whole construct evaluates to the matched arm's
+// value. A trailing comma is allowed. If no arm matches at runtime, a catchable
+// ValueError is raised (OP_MATCH_FAIL) — a `_` arm avoids this.
+void matchExpression(bool canAssign) {
+  consume(TOKEN_LEFT_PAREN, "Expect '(' after 'match'.");
+
+  beginScope();
+  expression(); // scrutinee
+  consume(TOKEN_RIGHT_PAREN, "Expect ')' after match value.");
+  consume(TOKEN_LEFT_BRACE, "Expect '{' before match arms.");
+
+  addLocal(syntheticToken(""));
+  markInitialized();
+  int scrutineeSlot = current->localCount - 1;
+
+  int armEnds[MAX_SWITCH_CASES];
+  int armCount = 0;
+  bool hasWildcard = false;
+
+  while (!check(TOKEN_RIGHT_BRACE) && !check(TOKEN_EOF)) {
+    if (hasWildcard) {
+      error("Unreachable pattern after wildcard '_'.");
+    }
+    compileMatchArm(scrutineeSlot, true, armEnds, &armCount, &hasWildcard);
+    if (!match(TOKEN_COMMA)) break; // arms are comma-separated (trailing ok)
+  }
+
+  consume(TOKEN_RIGHT_BRACE, "Expect '}' after match arms.");
+
+  // No arm matched at runtime: raise a catchable ValueError.
+  emitByte(OP_MATCH_FAIL);
+
+  // A matched arm jumps here, leaving [scrutinee, result] on the stack.
+  for (int i = 0; i < armCount; i++) {
+    patchJump(armEnds[i]);
+  }
+
+  // Drop the scrutinee, keeping the arm result as the expression's value.
+  endScopeKeepingTop();
 }
 
 static void emitCleanupToScope(int targetDepth) {

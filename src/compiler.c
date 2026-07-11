@@ -221,6 +221,41 @@ void endScope() {
   }
 }
 
+// Like endScope(), but preserves the value currently on top of the stack (e.g. a
+// match-expression arm's result). The scope's locals sit below that value; we
+// copy the result down into the lowest discarded slot (OP_SET_LOCAL does not
+// pop), then run the normal per-local pop/close sequence. Because there is one
+// extra physical stack entry (the result) above the N tracked locals, emitting N
+// pops removes the result-copy plus N-1 locals and leaves the result sitting in
+// the lowest slot as the new top of stack.
+void endScopeKeepingTop() {
+  current->scopeDepth--;
+
+  // Lowest local slot being discarded in this scope.
+  int lowest = -1;
+  for (int i = current->localCount - 1; i >= 0; i--) {
+    if (current->locals[i].depth <= current->scopeDepth) break;
+    lowest = i;
+  }
+
+  if (lowest == -1) {
+    return;  // no locals to discard; the result is already on top
+  }
+
+  emitBytes(OP_SET_LOCAL, (uint8_t)lowest);
+
+  while (current->localCount > 0 &&
+         current->locals[current->localCount - 1].depth >
+            current->scopeDepth) {
+    if (current->locals[current->localCount - 1].isCaptured) {
+      emitByte(OP_CLOSE_UPVALUE);
+    } else {
+      emitByte(OP_POP);
+    }
+    current->localCount--;
+  }
+}
+
 static char* processEscapes(const char* source, int sourceLen,
                             int* outLen) {
   char* result = (char*)malloc(sourceLen + 1);
@@ -919,7 +954,7 @@ ParseRule rules[] = {
   [TOKEN_THROW]         = {NULL,     NULL,   PREC_NONE},
   [TOKEN_FINALLY]       = {NULL,     NULL,   PREC_NONE},
   [TOKEN_TYPEOF]        = {typeof_,  NULL,   PREC_NONE},
-  [TOKEN_MATCH]         = {NULL,     NULL,   PREC_NONE},
+  [TOKEN_MATCH]         = {matchExpression, NULL, PREC_NONE},
   [TOKEN_IS]            = {NULL,     binary, PREC_COMPARISON},
   [TOKEN_DOT_DOT_DOT]  = {NULL,     NULL,   PREC_NONE},
   [TOKEN_QUESTION]      = {NULL,     ternary, PREC_TERNARY},

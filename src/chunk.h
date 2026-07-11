@@ -71,6 +71,7 @@ typedef enum {
   OP_BITWISE_NOT,
   OP_LEFT_SHIFT,
   OP_RIGHT_SHIFT,
+  OP_MATCH_FAIL,
 } OpCode;
 
 typedef struct {

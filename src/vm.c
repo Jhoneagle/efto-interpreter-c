@@ -1922,6 +1922,13 @@ static InterpretResult run(int baseFrame) {
         }
         break;
       }
+      case OP_MATCH_FAIL: {
+        // Reached only when a match expression had no matching arm.
+        raiseError(vm.valueErrorClass, "no match arm matched.");
+        InterpretResult r = postCallFailure(&frame, baseFrame);
+        if (r != INTERPRET_OK) return r;
+        break;
+      }
       case OP_INDEX_GET: {
         // executeIndexGet may raise a catchable error (e.g. bytes bounds via
         // raiseError) or abort via runtimeError; postCallFailure handles both.
