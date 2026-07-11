@@ -1,0 +1,46 @@
+// Set element equality semantics (Commit 12).
+// Set membership uses the same value-equality + hash as map keys.
+
+// 1 and 1.0 are the same element (numeric equality).
+var s = Set();
+s.add(1);
+s.add(1.0);
+print s.size;          // expect: 1
+print s.contains(1);   // expect: true
+print s.contains(1.0); // expect: true
+
+// Strings dedup by content (interned).
+var t = Set();
+t.add("x");
+t.add("x");
+print t.size;          // expect: 1
+print t.contains("x"); // expect: true
+
+// nil is a valid, single element.
+var n = Set();
+n.add(nil);
+n.add(nil);
+print n.size;          // expect: 1
+print n.contains(nil); // expect: true
+
+// true, false, 1, 0 are all distinct.
+var b = Set();
+b.add(true);
+b.add(false);
+b.add(1);
+b.add(0);
+print b.size; // expect: 4
+
+// Instances are distinct by identity, even when __eq__ reports equal.
+class Box {
+  init(v) { this.v = v; }
+  __eq__(o) { return this.v == o.v; }
+}
+var x = Box(5);
+var y = Box(5);
+print x == y;         // expect: true
+var st = Set();
+st.add(x);
+st.add(y);
+print st.size;        // expect: 2
+print st.contains(x); // expect: true

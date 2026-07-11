@@ -1,0 +1,58 @@
+// Map key equality semantics (Commit 12).
+// Keys are compared with the VM's value-equality + hash (identity for
+// instances) — NOT the `==` operator's __eq__ fallback. See value_table.c.
+
+// int and double that compare equal are the SAME key (1 and 1.0).
+var m = {};
+m[1] = "a";
+m[1.0] = "b";
+print m[1];    // expect: b
+print m[1.0];  // expect: b
+print m.size;  // expect: 1
+
+// nil is a valid, single key.
+var n = {};
+n[nil] = "null-value";
+print n[nil];  // expect: null-value
+print n.size;  // expect: 1
+
+// true, false, 1, and 0 are four distinct keys (no bool/number coercion).
+var b = {};
+b[true] = "T";
+b[false] = "F";
+b[1] = "one";
+b[0] = "zero";
+print b[true];  // expect: T
+print b[false]; // expect: F
+print b[1];     // expect: one
+print b[0];     // expect: zero
+print b.size;   // expect: 4
+
+// Strings are interned: content-equal strings are the same key.
+var s = {};
+s["key"] = 1;
+var built = "k" + "ey";
+s[built] = 2;
+print s["key"]; // expect: 2
+print s.size;   // expect: 1
+
+// Instances are keyed by IDENTITY, even when the class defines __eq__.
+// (The == operator honors __eq__; map keys deliberately do not.)
+class Point {
+  init(x) { this.x = x; }
+  __eq__(other) { return this.x == other.x; }
+}
+var p1 = Point(1);
+var p2 = Point(1);
+print p1 == p2;   // expect: true
+var im = {};
+im[p1] = "first";
+im[p2] = "second";
+print im[p1];     // expect: first
+print im[p2];     // expect: second
+print im.size;    // expect: 2
+
+// The same instance is the same key.
+im[p1] = "updated";
+print im[p1];     // expect: updated
+print im.size;    // expect: 2

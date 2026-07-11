@@ -10,6 +10,34 @@
  * Both use the same linear-probing hash table algorithm with tombstones.
  * Bug fixes to findEntry, adjustCapacity, or the probe sequence should be
  * checked in both files.
+ *
+ * KEY EQUALITY CONTRACT (map keys and set elements)
+ * -------------------------------------------------
+ * Keys are located by hashValue() + valuesEqual() (see value.c). This is the
+ * hashable protocol; it is intentionally value-based for built-ins and
+ * identity-based for instances:
+ *
+ *   - Numbers:  1 and 1.0 are the SAME key. hashValue() hashes every number
+ *               through its double bit pattern and valuesEqual() compares
+ *               numbers cross-type, so int/double that compare equal collide.
+ *   - Strings:  interned, so content-equal strings are the same key.
+ *   - Bytes:    hashed and compared by content (ObjBytes.hash is a stored
+ *               FNV-1a), so equal-content byte buffers are the same key.
+ *   - nil / true / false: each a single distinct key. No bool<->number
+ *               coercion: true, false, 1 and 0 are four different keys.
+ *   - Instances (and other heap objects without content equality): keyed by
+ *               IDENTITY (pointer). Two structurally-equal instances are
+ *               DIFFERENT keys.
+ *
+ * Deliberate limitation: key lookup does NOT invoke a class's __eq__/__hash__.
+ * The `==` operator does fall back to __eq__ (see OP_EQUAL in vm.c), so
+ * `a == b` can be true while map[a] and map[b] are still distinct entries.
+ * Honoring __eq__/__hash__ here would require re-entering the interpreter from
+ * inside hash probing — which runs during GC-triggering table growth — so it is
+ * intentionally not done. Use a primitive (string/number/bytes) derived from
+ * the instance as the key when value-based keying is needed.
+ *
+ * Verified by tests/maps/keys.efto and tests/collections/set_keys.efto.
  */
 
 void initValueTable(ValueTable* table) {
