@@ -12,6 +12,8 @@
 #include <windows.h>
 #else
 #include <unistd.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #endif
 
 #include "builtins.h"
@@ -2124,6 +2126,236 @@ static Value osArgsNative(int argCount, Value* args) {
   return OBJ_VAL(arr);
 }
 
+// --- os filesystem operations ---
+
+static Value osCwdNative(int argCount, Value* args) {
+  char buf[1024];
+#ifdef _WIN32
+  if (GetCurrentDirectoryA(sizeof(buf), buf) == 0) {
+    raiseError(vm.ioErrorClass, "cwd: could not read current directory.");
+    return NIL_VAL;
+  }
+#else
+  if (getcwd(buf, sizeof(buf)) == NULL) {
+    raiseError(vm.ioErrorClass, "cwd: could not read current directory.");
+    return NIL_VAL;
+  }
+#endif
+  return OBJ_VAL(copyString(buf, (int)strlen(buf)));
+}
+
+static Value osIsDirNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("isDir() expects a string path argument.");
+    return NIL_VAL;
+  }
+  const char* path = AS_CSTRING(args[0]);
+#ifdef _WIN32
+  DWORD attr = GetFileAttributesA(path);
+  bool result = (attr != INVALID_FILE_ATTRIBUTES) &&
+                (attr & FILE_ATTRIBUTE_DIRECTORY);
+#else
+  struct stat st;
+  bool result = (stat(path, &st) == 0) && S_ISDIR(st.st_mode);
+#endif
+  return BOOL_VAL(result);
+}
+
+static Value osIsFileNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("isFile() expects a string path argument.");
+    return NIL_VAL;
+  }
+  const char* path = AS_CSTRING(args[0]);
+#ifdef _WIN32
+  DWORD attr = GetFileAttributesA(path);
+  bool result = (attr != INVALID_FILE_ATTRIBUTES) &&
+                !(attr & FILE_ATTRIBUTE_DIRECTORY);
+#else
+  struct stat st;
+  bool result = (stat(path, &st) == 0) && S_ISREG(st.st_mode);
+#endif
+  return BOOL_VAL(result);
+}
+
+// Create a single directory. Returns true on success or if it already exists.
+static bool osMakeOneDir(const char* path) {
+#ifdef _WIN32
+  if (CreateDirectoryA(path, NULL)) return true;
+  return GetLastError() == ERROR_ALREADY_EXISTS;
+#else
+  if (mkdir(path, 0777) == 0) return true;
+  return errno == EEXIST;
+#endif
+}
+
+static Value osMkdirNative(int argCount, Value* args) {
+  if (argCount < 1 || argCount > 2 || !IS_STRING(args[0])) {
+    runtimeError("mkdir() expects (path, recursive?) with a string path.");
+    return NIL_VAL;
+  }
+  bool recursive = (argCount == 2) && !isFalsey(args[1]);
+  ObjString* pathStr = AS_STRING(args[0]);
+  const char* path = pathStr->chars;
+
+  if (!recursive) {
+    if (!osMakeOneDir(path)) {
+      raiseError(vm.ioErrorClass, "mkdir: could not create '%s'.", path);
+    }
+    return NIL_VAL;
+  }
+
+  // Recursive: create each parent prefix in turn (like `mkdir -p`).
+  int len = pathStr->length;
+  char* buf = (char*)malloc(len + 1);
+  memcpy(buf, path, len);
+  buf[len] = '\0';
+
+  bool ok = true;
+  for (int i = 1; i < len && ok; i++) {
+    if (buf[i] == '/' || buf[i] == '\\') {
+      char saved = buf[i];
+      buf[i] = '\0';
+      if (buf[0] != '\0') ok = osMakeOneDir(buf);
+      buf[i] = saved;
+    }
+  }
+  if (ok) ok = osMakeOneDir(buf);
+  free(buf);
+
+  if (!ok) {
+    raiseError(vm.ioErrorClass, "mkdir: could not create '%s'.", path);
+  }
+  return NIL_VAL;
+}
+
+static Value osRemoveDirNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("removeDir() expects a string path argument.");
+    return NIL_VAL;
+  }
+  const char* path = AS_CSTRING(args[0]);
+#ifdef _WIN32
+  if (!RemoveDirectoryA(path)) {
+#else
+  if (rmdir(path) != 0) {
+#endif
+    raiseError(vm.ioErrorClass, "removeDir: could not remove '%s'.", path);
+  }
+  return NIL_VAL;
+}
+
+static Value osRenameNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_STRING(args[0]) || !IS_STRING(args[1])) {
+    runtimeError("rename() expects (from, to) string arguments.");
+    return NIL_VAL;
+  }
+  if (rename(AS_CSTRING(args[0]), AS_CSTRING(args[1])) != 0) {
+    raiseError(vm.ioErrorClass, "rename: could not rename '%s' to '%s'.",
+               AS_CSTRING(args[0]), AS_CSTRING(args[1]));
+  }
+  return NIL_VAL;
+}
+
+static Value osCopyFileNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_STRING(args[0]) || !IS_STRING(args[1])) {
+    runtimeError("copyFile() expects (from, to) string arguments.");
+    return NIL_VAL;
+  }
+  const char* from = AS_CSTRING(args[0]);
+  const char* to = AS_CSTRING(args[1]);
+#ifdef _WIN32
+  if (!CopyFileA(from, to, FALSE)) {
+    raiseError(vm.ioErrorClass, "copyFile: could not copy '%s' to '%s'.",
+               from, to);
+  }
+#else
+  FILE* in = fopen(from, "rb");
+  if (in == NULL) {
+    raiseError(vm.ioErrorClass, "copyFile: could not open '%s'.", from);
+    return NIL_VAL;
+  }
+  FILE* out = fopen(to, "wb");
+  if (out == NULL) {
+    fclose(in);
+    raiseError(vm.ioErrorClass, "copyFile: could not open '%s'.", to);
+    return NIL_VAL;
+  }
+  char chunk[8192];
+  size_t n;
+  bool writeErr = false;
+  while ((n = fread(chunk, 1, sizeof(chunk), in)) > 0) {
+    if (fwrite(chunk, 1, n, out) != n) { writeErr = true; break; }
+  }
+  fclose(in);
+  fclose(out);
+  if (writeErr) {
+    raiseError(vm.ioErrorClass, "copyFile: could not write '%s'.", to);
+  }
+#endif
+  return NIL_VAL;
+}
+
+static Value osListDirNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("listDir() expects a string path argument.");
+    return NIL_VAL;
+  }
+  const char* path = AS_CSTRING(args[0]);
+
+#ifdef _WIN32
+  int plen = AS_STRING(args[0])->length;
+  char* pattern = (char*)malloc(plen + 3);
+  memcpy(pattern, path, plen);
+  pattern[plen] = '\\';
+  pattern[plen + 1] = '*';
+  pattern[plen + 2] = '\0';
+
+  WIN32_FIND_DATAA fd;
+  HANDLE handle = FindFirstFileA(pattern, &fd);
+  free(pattern);
+  if (handle == INVALID_HANDLE_VALUE) {
+    raiseError(vm.ioErrorClass, "listDir: could not open '%s'.", path);
+    return NIL_VAL;
+  }
+
+  ObjArray* arr = newArray();
+  push(OBJ_VAL(arr)); // GC protect
+  do {
+    const char* name = fd.cFileName;
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
+    ObjString* s = copyString(name, (int)strlen(name));
+    push(OBJ_VAL(s));
+    writeValueArray(&arr->elements, OBJ_VAL(s));
+    pop();
+  } while (FindNextFileA(handle, &fd));
+  FindClose(handle);
+  pop(); // arr
+  return OBJ_VAL(arr);
+#else
+  DIR* dir = opendir(path);
+  if (dir == NULL) {
+    raiseError(vm.ioErrorClass, "listDir: could not open '%s'.", path);
+    return NIL_VAL;
+  }
+
+  ObjArray* arr = newArray();
+  push(OBJ_VAL(arr)); // GC protect
+  struct dirent* ent;
+  while ((ent = readdir(dir)) != NULL) {
+    const char* name = ent->d_name;
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
+    ObjString* s = copyString(name, (int)strlen(name));
+    push(OBJ_VAL(s));
+    writeValueArray(&arr->elements, OBJ_VAL(s));
+    pop();
+  }
+  closedir(dir);
+  pop(); // arr
+  return OBJ_VAL(arr);
+#endif
+}
+
 // --- Collections module functions ---
 
 static Value collectionsRangeNative(int argCount, Value* args) {
@@ -3169,6 +3401,14 @@ void registerBuiltins(void) {
   defineModuleNative(osModule, "platform", osPlatformNative);
   defineModuleNative(osModule, "exec", osExecNative);
   defineModuleNative(osModule, "args", osArgsNative);
+  defineModuleNative(osModule, "cwd", osCwdNative);
+  defineModuleNative(osModule, "listDir", osListDirNative);
+  defineModuleNative(osModule, "mkdir", osMkdirNative);
+  defineModuleNative(osModule, "removeDir", osRemoveDirNative);
+  defineModuleNative(osModule, "isDir", osIsDirNative);
+  defineModuleNative(osModule, "isFile", osIsFileNative);
+  defineModuleNative(osModule, "rename", osRenameNative);
+  defineModuleNative(osModule, "copyFile", osCopyFileNative);
 
   // Built-in 'collections' module.
   ObjModule* collectionsModule = registerBuiltinModule("collections");

@@ -1,0 +1,31 @@
+// os filesystem errors are catchable IOError instances.
+import os;
+import { IOError, Error } from error;
+
+// listDir on a missing directory.
+try {
+  os.listDir("tests/os/_no_such_dir_xyz");
+  print "unreachable";
+} catch (IOError e) {
+  print "caught";     // expect: caught
+  print e is IOError; // expect: true
+  print e is Error;   // expect: true
+}
+
+// removeDir on a missing directory.
+try { os.removeDir("tests/os/_no_such_dir_xyz"); }
+catch (IOError e) { print "e-rmdir"; } // expect: e-rmdir
+
+// rename of a missing source.
+try { os.rename("tests/os/_no_such_file_xyz", "tests/os/_whatever"); }
+catch (IOError e) { print "e-rename"; } // expect: e-rename
+
+// copyFile from a missing source.
+try { os.copyFile("tests/os/_no_such_file_xyz", "tests/os/_test_tmp_out"); }
+catch (IOError e) { print "e-copy"; } // expect: e-copy
+
+// Non-recursive mkdir with a missing parent.
+try { os.mkdir("tests/os/_no_such_parent_xyz/child"); }
+catch (IOError e) { print "e-mkdir"; } // expect: e-mkdir
+
+print "after"; // expect: after

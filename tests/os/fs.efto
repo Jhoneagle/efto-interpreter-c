@@ -1,0 +1,60 @@
+// os filesystem operations: mkdir, isDir/isFile, listDir, copyFile, rename,
+// removeDir, cwd. Uses a unique temp directory and cleans up in finally.
+import os;
+import io;
+
+var dir = "tests/os/_test_tmp_dir";
+var sub = dir + "/nested/deep";
+var f1 = dir + "/a.txt";
+var f2 = dir + "/b.txt";
+var f3 = dir + "/c.txt";
+
+try {
+  // cwd() returns a non-empty string.
+  var here = os.cwd();
+  print type(here);       // expect: string
+  print here.length > 0;  // expect: true
+
+  // mkdir then isDir/isFile.
+  os.mkdir(dir);
+  print os.isDir(dir);    // expect: true
+  print os.isFile(dir);   // expect: false
+
+  // Recursive mkdir creates intermediate directories.
+  os.mkdir(sub, true);
+  print os.isDir(sub);    // expect: true
+
+  // Write a file; isFile true, isDir false.
+  io.writeFile(f1, "one");
+  print os.isFile(f1);    // expect: true
+  print os.isDir(f1);     // expect: false
+
+  // Missing paths report false (no error raised).
+  print os.isDir("tests/os/_missing_xyz");  // expect: false
+  print os.isFile("tests/os/_missing_xyz"); // expect: false
+
+  // copyFile duplicates content.
+  os.copyFile(f1, f2);
+  print io.readFile(f2);  // expect: one
+
+  // rename moves a file.
+  os.rename(f2, f3);
+  print os.isFile(f2);    // expect: false
+  print os.isFile(f3);    // expect: true
+
+  // listDir returns entries excluding '.'/'..' (order not guaranteed).
+  var names = os.listDir(dir);
+  print type(names);                 // expect: array
+  print names.length;                // expect: 3
+  print names.indexOf("a.txt") >= 0;  // expect: true
+  print names.indexOf("c.txt") >= 0;  // expect: true
+  print names.indexOf("nested") >= 0; // expect: true
+} finally {
+  // Clean up leaf-first (removeDir requires empty directories).
+  if (io.fileExists(f1)) { io.deleteFile(f1); }
+  if (io.fileExists(f2)) { io.deleteFile(f2); }
+  if (io.fileExists(f3)) { io.deleteFile(f3); }
+  if (os.isDir(sub)) { os.removeDir(sub); }
+  if (os.isDir(dir + "/nested")) { os.removeDir(dir + "/nested"); }
+  if (os.isDir(dir)) { os.removeDir(dir); }
+}
