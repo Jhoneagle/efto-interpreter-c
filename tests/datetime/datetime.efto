@@ -1,0 +1,31 @@
+// datetime module: DateTime / Duration objects, arithmetic, parsing.
+import datetime;
+
+var dt = datetime.fromParts(2021, 6, 15, 10, 30, 0);
+print dt.year();    // expect: 2021
+print dt.month();   // expect: 6
+print dt.day();     // expect: 15
+print dt.hour();    // expect: 10
+print dt.minute();  // expect: 30
+print dt.second();  // expect: 0
+print dt.format("%Y-%m-%d");  // expect: 2021-06-15
+
+// Duration arithmetic.
+var later = dt.add(datetime.hours(2));
+print later.hour();  // expect: 12
+print later.sub(dt).seconds();  // expect: 7200
+
+// Comparison.
+print dt.isBefore(later);   // expect: true
+print later.isAfter(dt);    // expect: true
+print dt.compareTo(later);  // expect: -1
+
+// Parse.
+var p = datetime.parse("2020-01-02 03:04:05", "%Y-%m-%d %H:%M:%S");
+print p.year();   // expect: 2020
+print p.month();  // expect: 1
+print p.day();    // expect: 2
+print p.hour();   // expect: 3
+
+// Timestamp round-trip.
+print datetime.fromTimestamp(dt.timestamp()).year();  // expect: 2021

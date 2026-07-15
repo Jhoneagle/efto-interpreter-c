@@ -1,0 +1,20 @@
+// base64 module: encode/decode, URL-safe variant.
+import base64;
+import string;
+
+// Standard encoding with padding.
+print base64.encode("hello");   // expect: aGVsbG8=
+print base64.encode("foo");     // expect: Zm9v
+print base64.encode("fo");      // expect: Zm8=
+print base64.encode("f");       // expect: Zg==
+
+// Decode returns bytes; decode back to text.
+print string.decode(base64.decode("aGVsbG8="));  // expect: hello
+print string.decode(base64.decode("Zm9vYmFy"));  // expect: foobar
+
+// URL-safe: no padding, round-trips.
+print base64.encodeUrl("hello");                    // expect: aGVsbG8
+print string.decode(base64.decodeUrl("aGVsbG8"));   // expect: hello
+
+// Whitespace is ignored on decode.
+print string.decode(base64.decode("aGVs bG8="));    // expect: hello

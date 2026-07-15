@@ -1,0 +1,22 @@
+// logging module: level threshold and file output.
+import logging;
+import io;
+
+logging.setOutput("test_logging_output.tmp");
+logging.setLevel(logging.DEBUG);
+logging.info("hello world");
+logging.debug("dbg line");
+
+logging.setLevel(logging.WARN);
+logging.info("filtered out");
+logging.warn("warning here");
+
+logging.setOutput(nil);  // close the file
+
+var content = io.readFile("test_logging_output.tmp");
+print content.contains("INFO hello world");   // expect: true
+print content.contains("DEBUG dbg line");      // expect: true
+print content.contains("filtered out");        // expect: false
+print content.contains("WARN warning here");   // expect: true
+
+io.deleteFile("test_logging_output.tmp");

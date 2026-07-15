@@ -1,0 +1,16 @@
+// uuid module: v4, v7 (time-sortable), nil.
+import uuid;
+
+var u = uuid.v4();
+print u.length;      // expect: 36
+print u.charAt(14);  // expect: 4
+
+var u7 = uuid.v7();
+print u7.length;      // expect: 36
+print u7.charAt(14);  // expect: 7
+
+print uuid.zero();  // expect: 00000000-0000-0000-0000-000000000000
+
+// Variant nibble (index 19) is one of 8,9,a,b.
+var v = u.charAt(19);
+print v == "8" or v == "9" or v == "a" or v == "b";  // expect: true

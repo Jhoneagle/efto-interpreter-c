@@ -1,0 +1,24 @@
+// statistics module: central tendency, spread, quantiles.
+import statistics;
+import { ValueError } from error;
+
+print statistics.mean([1, 2, 3, 4]);   // expect: 2.5
+print statistics.mean([2, 4, 6]);      // expect: 4
+print statistics.median([1, 2, 3]);    // expect: 2
+print statistics.median([1, 2, 3, 4]); // expect: 2.5
+print statistics.mode([1, 2, 2, 3]);   // expect: 2
+print statistics.min([3, 1, 2]);       // expect: 1
+print statistics.max([3, 1, 2]);       // expect: 3
+print statistics.range([1, 5, 3]);     // expect: 4
+print statistics.variance([2, 4, 6]);  // expect: 4
+print statistics.pvariance([2, 4, 6]); // expect: 2.66667
+print statistics.stdev([2, 4, 6]);     // expect: 2
+print statistics.quantile([1, 2, 3, 4], 0.5);  // expect: 2.5
+
+// Empty data raises a catchable ValueError.
+try {
+  statistics.mean([]);
+  print "no error";
+} catch (ValueError e) {
+  print "caught";  // expect: caught
+}

@@ -1,0 +1,32 @@
+// random module: seeded for determinism; asserts bounds and reproducibility.
+import random;
+
+random.seed(42);
+
+// int is within the inclusive range.
+var x = random.int(1, 6);
+print x >= 1 and x <= 6;  // expect: true
+
+print type(random.float(0.0, 1.0));  // expect: double
+print type(random.bool());           // expect: bool
+
+var arr = [10, 20, 30];
+var c = random.choice(arr);
+print c == 10 or c == 20 or c == 30;  // expect: true
+
+// sample returns k elements.
+print random.sample(arr, 2).length;  // expect: 2
+
+// shuffle preserves length.
+random.shuffle(arr);
+print arr.length;  // expect: 3
+
+// bytes(n) yields n bytes (hex is 2 chars per byte).
+print random.bytes(4).hex().length;  // expect: 8
+
+// Same seed reproduces the same value.
+random.seed(7);
+var a1 = random.int(0, 1000000);
+random.seed(7);
+var a2 = random.int(0, 1000000);
+print a1 == a2;  // expect: true

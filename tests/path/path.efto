@@ -1,0 +1,32 @@
+// path module: separator-agnostic assertions (uses '/' input, which is a
+// separator on every platform; checks components, which carry no separator).
+import path;
+
+// basename / dirname preserve the input's separators.
+print path.basename("/a/b/c.txt");   // expect: c.txt
+print path.dirname("/a/b/c.txt");    // expect: /a/b
+
+// extname.
+print path.extname("file.tar.gz");   // expect: .gz
+print "[" + path.extname("noext") + "]";  // expect: []
+
+// splitext splits root and extension.
+var se = path.splitext("archive.zip");
+print se[0];  // expect: archive
+print se[1];  // expect: .zip
+
+// isAbsolute.
+print path.isAbsolute("/foo");  // expect: true
+print path.isAbsolute("foo");   // expect: false
+
+// normalize collapses '.' and '..' (compare via separator-free components).
+print path.basename(path.normalize("a/b/../c"));  // expect: c
+print path.dirname(path.normalize("a/b/../c"));   // expect: a
+print path.normalize("a/..");                     // expect: .
+print path.normalize("./x/./y").length > 0;       // expect: true
+
+// join result's basename is stable across platforms.
+print path.basename(path.join("a", "b", "c.txt"));  // expect: c.txt
+
+// sep is one of the two known separators.
+print path.sep == "/" or path.sep == "\\";  // expect: true

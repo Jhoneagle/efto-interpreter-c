@@ -4423,6 +4423,1179 @@ static Value stringSplitNative(int argCount, Value* args) {
   return result;
 }
 
+/* =========================================================================
+ * Additional native modules: base64, path, random, uuid, datetime, logging,
+ * statistics. (http intentionally omitted.)
+ * ========================================================================= */
+
+/* DateTime / Duration are instance-backed classes (like the Error hierarchy):
+ * data lives in hidden instance fields, methods dispatch via klass->methods. */
+static ObjClass* dateTimeClass = NULL;
+static ObjClass* durationClass = NULL;
+
+/* Current wall-clock time in milliseconds since the Unix epoch (UTC). */
+static int64_t nowMillis(void) {
+#ifdef _WIN32
+  FILETIME ft;
+  GetSystemTimeAsFileTime(&ft);
+  uint64_t t = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+  /* 116444736000000000 = 100ns intervals between 1601-01-01 and 1970-01-01. */
+  t -= 116444736000000000ULL;
+  return (int64_t)(t / 10000ULL);
+#else
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
+#endif
+}
+
+/* ---------------------------------------------------------------- base64 -- */
+
+static const char B64_STD[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+static const char B64_URL[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+static int b64Value(int c) {
+  if (c >= 'A' && c <= 'Z') return c - 'A';
+  if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+  if (c >= '0' && c <= '9') return c - '0' + 52;
+  if (c == '+' || c == '-') return 62;
+  if (c == '/' || c == '_') return 63;
+  return -1;
+}
+
+static bool getBytesOrString(Value v, const uint8_t** data, size_t* len) {
+  if (IS_BYTES(v)) {
+    ObjBytes* b = AS_BYTES(v);
+    *data = b->bytes;
+    *len = (size_t)b->length;
+    return true;
+  }
+  if (IS_STRING(v)) {
+    ObjString* s = AS_STRING(v);
+    *data = (const uint8_t*)s->chars;
+    *len = (size_t)s->length;
+    return true;
+  }
+  return false;
+}
+
+static Value base64EncodeImpl(const uint8_t* data, size_t len,
+                              const char* alphabet, bool pad) {
+  size_t outLen = pad ? ((len + 2) / 3) * 4 : (len * 4 + 2) / 3;
+  char* out = ALLOCATE(char, outLen + 1);
+  size_t o = 0, i = 0;
+  while (i + 3 <= len) {
+    uint32_t n = ((uint32_t)data[i] << 16) | ((uint32_t)data[i + 1] << 8) |
+                 (uint32_t)data[i + 2];
+    out[o++] = alphabet[(n >> 18) & 63];
+    out[o++] = alphabet[(n >> 12) & 63];
+    out[o++] = alphabet[(n >> 6) & 63];
+    out[o++] = alphabet[n & 63];
+    i += 3;
+  }
+  size_t rem = len - i;
+  if (rem == 1) {
+    uint32_t n = (uint32_t)data[i] << 16;
+    out[o++] = alphabet[(n >> 18) & 63];
+    out[o++] = alphabet[(n >> 12) & 63];
+    if (pad) { out[o++] = '='; out[o++] = '='; }
+  } else if (rem == 2) {
+    uint32_t n = ((uint32_t)data[i] << 16) | ((uint32_t)data[i + 1] << 8);
+    out[o++] = alphabet[(n >> 18) & 63];
+    out[o++] = alphabet[(n >> 12) & 63];
+    out[o++] = alphabet[(n >> 6) & 63];
+    if (pad) out[o++] = '=';
+  }
+  out[o] = '\0';
+  return OBJ_VAL(takeString(out, (int)o));
+}
+
+/* Lenient decoder: accepts both standard (+/) and URL-safe (-_) alphabets,
+ * ignores ASCII whitespace, and tolerates missing padding. */
+static Value base64DecodeImpl(const char* s, size_t len) {
+  uint8_t* out = ALLOCATE(uint8_t, len);
+  size_t o = 0;
+  uint32_t acc = 0;
+  int bits = 0;
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)s[i];
+    if (c == '=') break;
+    if (c == ' ' || c == '\n' || c == '\r' || c == '\t') continue;
+    int v = b64Value(c);
+    if (v < 0) {
+      FREE_ARRAY(uint8_t, out, len);
+      raiseError(vm.valueErrorClass, "base64: invalid character.");
+      return NIL_VAL;
+    }
+    acc = (acc << 6) | (uint32_t)v;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out[o++] = (uint8_t)((acc >> bits) & 0xFF);
+    }
+  }
+  ObjBytes* b = newBytes(out, (int)o);
+  FREE_ARRAY(uint8_t, out, len);
+  return OBJ_VAL(b);
+}
+
+static Value base64EncodeNative(int argCount, Value* args) {
+  if (argCount != 1) {
+    runtimeError("base64.encode() expects 1 argument.");
+    return NIL_VAL;
+  }
+  const uint8_t* d; size_t n;
+  if (!getBytesOrString(args[0], &d, &n)) {
+    runtimeError("base64.encode() expects bytes or a string.");
+    return NIL_VAL;
+  }
+  return base64EncodeImpl(d, n, B64_STD, true);
+}
+
+static Value base64EncodeUrlNative(int argCount, Value* args) {
+  if (argCount != 1) {
+    runtimeError("base64.encodeUrl() expects 1 argument.");
+    return NIL_VAL;
+  }
+  const uint8_t* d; size_t n;
+  if (!getBytesOrString(args[0], &d, &n)) {
+    runtimeError("base64.encodeUrl() expects bytes or a string.");
+    return NIL_VAL;
+  }
+  return base64EncodeImpl(d, n, B64_URL, false);
+}
+
+static Value base64DecodeNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("base64.decode() expects a string.");
+    return NIL_VAL;
+  }
+  ObjString* s = AS_STRING(args[0]);
+  return base64DecodeImpl(s->chars, (size_t)s->length);
+}
+
+/* ------------------------------------------------------------------ path -- */
+
+#ifdef _WIN32
+static const char PATH_SEP = '\\';
+#else
+static const char PATH_SEP = '/';
+#endif
+
+static bool pathIsSep(char c) {
+#ifdef _WIN32
+  return c == '/' || c == '\\';
+#else
+  return c == '/';
+#endif
+}
+
+static bool pathIsAbsoluteStr(const char* p) {
+  if (p[0] == '\0') return false;
+#ifdef _WIN32
+  if (pathIsSep(p[0]) && pathIsSep(p[1])) return true; /* UNC */
+  if (((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) &&
+      p[1] == ':' && pathIsSep(p[2]))
+    return true;
+  return pathIsSep(p[0]);
+#else
+  return pathIsSep(p[0]);
+#endif
+}
+
+/* Lexically normalize `in` into `out`. Returns length, or -1 on overflow. */
+static int pathNormalizeInto(const char* in, char* out, size_t cap) {
+  char work[4096];
+  size_t n = strlen(in);
+  if (n >= sizeof(work)) return -1;
+  memcpy(work, in, n + 1);
+  for (size_t i = 0; i < n; i++)
+    if (pathIsSep(work[i])) work[i] = PATH_SEP;
+
+  char prefix[4]; prefix[0] = '\0';
+  size_t start = 0;
+#ifdef _WIN32
+  if (n >= 2 &&
+      ((work[0] >= 'A' && work[0] <= 'Z') || (work[0] >= 'a' && work[0] <= 'z')) &&
+      work[1] == ':') {
+    prefix[0] = work[0]; prefix[1] = ':'; prefix[2] = '\0';
+    start = 2;
+  }
+#endif
+  bool absolute = (work[start] == PATH_SEP);
+
+  char* comps[512];
+  int nc = 0;
+  char* cur = work + start;
+  while (*cur != '\0') {
+    while (*cur == PATH_SEP) cur++;      /* skip separators */
+    if (*cur == '\0') break;
+    char* tok = cur;
+    while (*cur != '\0' && *cur != PATH_SEP) cur++;
+    if (*cur != '\0') { *cur = '\0'; cur++; }
+    if (strcmp(tok, ".") == 0) {
+      /* skip */
+    } else if (strcmp(tok, "..") == 0) {
+      if (nc > 0 && strcmp(comps[nc - 1], "..") != 0) {
+        nc--;
+      } else if (!absolute) {
+        if (nc < 512) comps[nc++] = tok;
+      }
+    } else {
+      if (nc < 512) comps[nc++] = tok;
+    }
+  }
+
+  size_t ol = 0;
+  size_t pl = strlen(prefix);
+  if (pl + 1 >= cap) return -1;
+  memcpy(out, prefix, pl);
+  ol = pl;
+  if (absolute) out[ol++] = PATH_SEP;
+  for (int i = 0; i < nc; i++) {
+    if (i > 0) {
+      if (ol + 1 >= cap) return -1;
+      out[ol++] = PATH_SEP;
+    }
+    size_t cl = strlen(comps[i]);
+    if (ol + cl + 1 >= cap) return -1;
+    memcpy(out + ol, comps[i], cl);
+    ol += cl;
+  }
+  if (ol == 0) out[ol++] = '.';
+  out[ol] = '\0';
+  return (int)ol;
+}
+
+static Value pathJoinNative(int argCount, Value* args) {
+  char buf[4096];
+  size_t len = 0;
+  buf[0] = '\0';
+  for (int i = 0; i < argCount; i++) {
+    if (!IS_STRING(args[i])) {
+      runtimeError("path.join() expects string arguments.");
+      return NIL_VAL;
+    }
+    const char* part = AS_CSTRING(args[i]);
+    if (part[0] == '\0') continue;
+    if (pathIsAbsoluteStr(part)) { len = 0; buf[0] = '\0'; }
+    if (len > 0 && !pathIsSep(buf[len - 1])) {
+      if (len + 1 >= sizeof(buf)) {
+        raiseError(vm.valueErrorClass, "path.join(): path too long.");
+        return NIL_VAL;
+      }
+      buf[len++] = PATH_SEP;
+      buf[len] = '\0';
+    }
+    size_t pl = strlen(part);
+    if (len + pl >= sizeof(buf)) {
+      raiseError(vm.valueErrorClass, "path.join(): path too long.");
+      return NIL_VAL;
+    }
+    memcpy(buf + len, part, pl);
+    len += pl;
+    buf[len] = '\0';
+  }
+  return OBJ_VAL(copyString(buf, (int)len));
+}
+
+/* Index just past the last separator, or 0 if none. */
+static int pathLastSep(const char* p, int len) {
+  for (int i = len - 1; i >= 0; i--)
+    if (pathIsSep(p[i])) return i;
+  return -1;
+}
+
+static Value pathDirnameNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("path.dirname() expects a string.");
+    return NIL_VAL;
+  }
+  ObjString* s = AS_STRING(args[0]);
+  int sep = pathLastSep(s->chars, s->length);
+  if (sep < 0) return OBJ_VAL(copyString(".", 1));
+  if (sep == 0) return OBJ_VAL(copyString(s->chars, 1)); /* root */
+  return OBJ_VAL(copyString(s->chars, sep));
+}
+
+static Value pathBasenameNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("path.basename() expects a string.");
+    return NIL_VAL;
+  }
+  ObjString* s = AS_STRING(args[0]);
+  int sep = pathLastSep(s->chars, s->length);
+  return OBJ_VAL(copyString(s->chars + sep + 1, s->length - sep - 1));
+}
+
+/* Offset of the extension dot within basename, or -1 if none. */
+static int pathExtDot(const char* base, int len) {
+  for (int i = len - 1; i > 0; i--) {
+    if (base[i] == '.') return i;
+    if (pathIsSep(base[i])) break;
+  }
+  return -1;
+}
+
+static Value pathExtnameNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("path.extname() expects a string.");
+    return NIL_VAL;
+  }
+  ObjString* s = AS_STRING(args[0]);
+  int sep = pathLastSep(s->chars, s->length);
+  const char* base = s->chars + sep + 1;
+  int blen = s->length - sep - 1;
+  int dot = pathExtDot(base, blen);
+  if (dot < 0) return OBJ_VAL(copyString("", 0));
+  return OBJ_VAL(copyString(base + dot, blen - dot));
+}
+
+static Value pathSplitextNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("path.splitext() expects a string.");
+    return NIL_VAL;
+  }
+  ObjString* s = AS_STRING(args[0]);
+  int sep = pathLastSep(s->chars, s->length);
+  const char* base = s->chars + sep + 1;
+  int blen = s->length - sep - 1;
+  int dot = pathExtDot(base, blen);
+  int rootLen = (dot < 0) ? s->length : sep + 1 + dot;
+  ObjArray* arr = newArray();
+  push(OBJ_VAL(arr));
+  ObjString* root = copyString(s->chars, rootLen);
+  push(OBJ_VAL(root));
+  writeValueArray(&arr->elements, OBJ_VAL(root));
+  pop();
+  ObjString* ext = (dot < 0) ? copyString("", 0)
+                             : copyString(base + dot, blen - dot);
+  push(OBJ_VAL(ext));
+  writeValueArray(&arr->elements, OBJ_VAL(ext));
+  pop();
+  pop();
+  return OBJ_VAL(arr);
+}
+
+static Value pathSplitNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("path.split() expects a string.");
+    return NIL_VAL;
+  }
+  ObjString* s = AS_STRING(args[0]);
+  int sep = pathLastSep(s->chars, s->length);
+  ObjArray* arr = newArray();
+  push(OBJ_VAL(arr));
+  ObjString* dir = (sep < 0)  ? copyString(".", 1)
+                   : (sep == 0) ? copyString(s->chars, 1)
+                                : copyString(s->chars, sep);
+  push(OBJ_VAL(dir));
+  writeValueArray(&arr->elements, OBJ_VAL(dir));
+  pop();
+  ObjString* base = copyString(s->chars + sep + 1, s->length - sep - 1);
+  push(OBJ_VAL(base));
+  writeValueArray(&arr->elements, OBJ_VAL(base));
+  pop();
+  pop();
+  return OBJ_VAL(arr);
+}
+
+static Value pathNormalizeNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("path.normalize() expects a string.");
+    return NIL_VAL;
+  }
+  char out[4096];
+  int len = pathNormalizeInto(AS_CSTRING(args[0]), out, sizeof(out));
+  if (len < 0) {
+    raiseError(vm.valueErrorClass, "path.normalize(): path too long.");
+    return NIL_VAL;
+  }
+  return OBJ_VAL(copyString(out, len));
+}
+
+static Value pathIsAbsoluteNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("path.isAbsolute() expects a string.");
+    return NIL_VAL;
+  }
+  return BOOL_VAL(pathIsAbsoluteStr(AS_CSTRING(args[0])));
+}
+
+static Value pathAbsoluteNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) {
+    runtimeError("path.absolute() expects a string.");
+    return NIL_VAL;
+  }
+  const char* p = AS_CSTRING(args[0]);
+  char out[4096];
+  int len;
+  if (pathIsAbsoluteStr(p)) {
+    len = pathNormalizeInto(p, out, sizeof(out));
+  } else {
+    char cwd[2048];
+#ifdef _WIN32
+    if (GetCurrentDirectoryA(sizeof(cwd), cwd) == 0) {
+      raiseError(vm.ioErrorClass, "path.absolute(): could not read cwd.");
+      return NIL_VAL;
+    }
+#else
+    if (getcwd(cwd, sizeof(cwd)) == NULL) {
+      raiseError(vm.ioErrorClass, "path.absolute(): could not read cwd.");
+      return NIL_VAL;
+    }
+#endif
+    char joined[4096];
+    int jl = snprintf(joined, sizeof(joined), "%s%c%s", cwd, PATH_SEP, p);
+    if (jl < 0 || (size_t)jl >= sizeof(joined)) {
+      raiseError(vm.valueErrorClass, "path.absolute(): path too long.");
+      return NIL_VAL;
+    }
+    len = pathNormalizeInto(joined, out, sizeof(out));
+  }
+  if (len < 0) {
+    raiseError(vm.valueErrorClass, "path.absolute(): path too long.");
+    return NIL_VAL;
+  }
+  return OBJ_VAL(copyString(out, len));
+}
+
+/* ---------------------------------------------------------------- random -- */
+/* Reuses the deterministic RNG (rngState / rngNext) backing math.random(),
+ * so math.seed()/random.seed() drive one shared, reproducible stream. */
+
+/* Unbiased inclusive integer in [lo, hi] via rejection sampling. */
+static int64_t randRange(int64_t lo, int64_t hi) {
+  uint64_t range = (uint64_t)(hi - lo) + 1ULL;
+  if (range == 0) return (int64_t)rngNext(); /* full 64-bit span */
+  uint64_t limit = UINT64_MAX - (UINT64_MAX % range);
+  uint64_t r;
+  do { r = rngNext(); } while (r >= limit);
+  return lo + (int64_t)(r % range);
+}
+
+static Value randIntNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_INT(args[0]) || !IS_INT(args[1])) {
+    runtimeError("random.int() expects two integer arguments.");
+    return NIL_VAL;
+  }
+  int64_t lo = AS_INT(args[0]), hi = AS_INT(args[1]);
+  if (lo > hi) {
+    raiseError(vm.valueErrorClass, "random.int(): min must be <= max.");
+    return NIL_VAL;
+  }
+  return INT_VAL(randRange(lo, hi));
+}
+
+static Value randFloatNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_NUMBER(args[0]) || !IS_NUMBER(args[1])) {
+    runtimeError("random.float() expects two number arguments.");
+    return NIL_VAL;
+  }
+  double lo = AS_DOUBLE_COERCE(args[0]), hi = AS_DOUBLE_COERCE(args[1]);
+  return DOUBLE_VAL(lo + (hi - lo) * rngNextDouble());
+}
+
+static Value randBoolNative(int argCount, Value* args) {
+  return BOOL_VAL((rngNext() >> 63) != 0);
+}
+
+static Value randChoiceNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_ARRAY(args[0])) {
+    runtimeError("random.choice() expects an array.");
+    return NIL_VAL;
+  }
+  ObjArray* a = AS_ARRAY(args[0]);
+  if (a->elements.count == 0) {
+    raiseError(vm.valueErrorClass, "random.choice(): empty array.");
+    return NIL_VAL;
+  }
+  return a->elements.values[randRange(0, a->elements.count - 1)];
+}
+
+static Value randShuffleNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_ARRAY(args[0])) {
+    runtimeError("random.shuffle() expects an array.");
+    return NIL_VAL;
+  }
+  ObjArray* a = AS_ARRAY(args[0]);
+  for (int i = a->elements.count - 1; i > 0; i--) {
+    int j = (int)randRange(0, i);
+    Value tmp = a->elements.values[i];
+    a->elements.values[i] = a->elements.values[j];
+    a->elements.values[j] = tmp;
+  }
+  return NIL_VAL;
+}
+
+static Value randSampleNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_ARRAY(args[0]) || !IS_INT(args[1])) {
+    runtimeError("random.sample() expects (array, count).");
+    return NIL_VAL;
+  }
+  ObjArray* a = AS_ARRAY(args[0]);
+  int n = a->elements.count;
+  int64_t k = AS_INT(args[1]);
+  if (k < 0 || k > n) {
+    raiseError(vm.valueErrorClass, "random.sample(): count out of range.");
+    return NIL_VAL;
+  }
+  int* idx = ALLOCATE(int, n > 0 ? n : 1);
+  for (int i = 0; i < n; i++) idx[i] = i;
+  ObjArray* result = newArray();
+  push(OBJ_VAL(result));
+  for (int i = 0; i < (int)k; i++) {
+    int j = (int)randRange(i, n - 1);
+    int t = idx[i]; idx[i] = idx[j]; idx[j] = t;
+    writeValueArray(&result->elements, a->elements.values[idx[i]]);
+  }
+  pop();
+  FREE_ARRAY(int, idx, n > 0 ? n : 1);
+  return OBJ_VAL(result);
+}
+
+static Value randBytesNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_INT(args[0])) {
+    runtimeError("random.bytes() expects an integer count.");
+    return NIL_VAL;
+  }
+  int64_t n = AS_INT(args[0]);
+  if (n < 0) {
+    raiseError(vm.valueErrorClass, "random.bytes(): count must be >= 0.");
+    return NIL_VAL;
+  }
+  uint8_t* buf = ALLOCATE(uint8_t, n > 0 ? n : 1);
+  for (int64_t i = 0; i < n; i++) buf[i] = (uint8_t)(rngNext() >> 24);
+  ObjBytes* b = newBytes(buf, (int)n);
+  FREE_ARRAY(uint8_t, buf, n > 0 ? n : 1);
+  return OBJ_VAL(b);
+}
+
+/* ------------------------------------------------------------------ uuid -- */
+
+static void fillRandomBytes(uint8_t* b, int n) {
+  for (int i = 0; i < n; i++) b[i] = (uint8_t)(rngNext() >> 24);
+}
+
+static Value formatUuid(const uint8_t* b) {
+  static const char* hexd = "0123456789abcdef";
+  char out[37];
+  int o = 0;
+  for (int i = 0; i < 16; i++) {
+    if (i == 4 || i == 6 || i == 8 || i == 10) out[o++] = '-';
+    out[o++] = hexd[b[i] >> 4];
+    out[o++] = hexd[b[i] & 0xF];
+  }
+  out[36] = '\0';
+  return OBJ_VAL(copyString(out, 36));
+}
+
+static Value uuidV4Native(int argCount, Value* args) {
+  uint8_t b[16];
+  fillRandomBytes(b, 16);
+  b[6] = (b[6] & 0x0F) | 0x40;
+  b[8] = (b[8] & 0x3F) | 0x80;
+  return formatUuid(b);
+}
+
+static Value uuidV7Native(int argCount, Value* args) {
+  int64_t ms = nowMillis();
+  uint8_t b[16];
+  fillRandomBytes(b, 16);
+  b[0] = (uint8_t)((ms >> 40) & 0xFF);
+  b[1] = (uint8_t)((ms >> 32) & 0xFF);
+  b[2] = (uint8_t)((ms >> 24) & 0xFF);
+  b[3] = (uint8_t)((ms >> 16) & 0xFF);
+  b[4] = (uint8_t)((ms >> 8) & 0xFF);
+  b[5] = (uint8_t)(ms & 0xFF);
+  b[6] = (b[6] & 0x0F) | 0x70;
+  b[8] = (b[8] & 0x3F) | 0x80;
+  return formatUuid(b);
+}
+
+static Value uuidNilNative(int argCount, Value* args) {
+  uint8_t b[16];
+  memset(b, 0, sizeof(b));
+  return formatUuid(b);
+}
+
+/* -------------------------------------------------------------- datetime -- */
+
+static bool isInstanceOf(Value v, ObjClass* k) {
+  return IS_INSTANCE(v) && AS_INSTANCE(v)->klass == k;
+}
+
+static Value makeDateTime(int64_t ms, bool utc) {
+  ObjInstance* inst = newInstance(dateTimeClass);
+  push(OBJ_VAL(inst));
+  ObjString* k = copyString("_ms", 3);
+  push(OBJ_VAL(k));
+  tableSet(&inst->fields, k, INT_VAL(ms));
+  pop();
+  k = copyString("_utc", 4);
+  push(OBJ_VAL(k));
+  tableSet(&inst->fields, k, BOOL_VAL(utc));
+  pop();
+  pop();
+  return OBJ_VAL(inst);
+}
+
+static Value makeDuration(int64_t secs) {
+  ObjInstance* inst = newInstance(durationClass);
+  push(OBJ_VAL(inst));
+  ObjString* k = copyString("_secs", 5);
+  push(OBJ_VAL(k));
+  tableSet(&inst->fields, k, INT_VAL(secs));
+  pop();
+  pop();
+  return OBJ_VAL(inst);
+}
+
+static bool dtGet(Value receiver, int64_t* ms, bool* utc) {
+  ObjInstance* inst = AS_INSTANCE(receiver);
+  Value v;
+  ObjString* k = copyString("_ms", 3);
+  if (!tableGet(&inst->fields, k, &v) || !IS_INT(v)) return false;
+  *ms = AS_INT(v);
+  k = copyString("_utc", 4);
+  Value u;
+  *utc = (tableGet(&inst->fields, k, &u) && IS_BOOL(u)) ? AS_BOOL(u) : false;
+  return true;
+}
+
+static bool durGet(Value receiver, int64_t* secs) {
+  ObjInstance* inst = AS_INSTANCE(receiver);
+  Value v;
+  ObjString* k = copyString("_secs", 5);
+  if (!tableGet(&inst->fields, k, &v) || !IS_INT(v)) return false;
+  *secs = AS_INT(v);
+  return true;
+}
+
+static bool dtBreak(Value receiver, struct tm* out) {
+  int64_t ms; bool utc;
+  if (!dtGet(receiver, &ms, &utc)) return false;
+  time_t secs = (time_t)(ms / 1000);
+  struct tm* tm = utc ? gmtime(&secs) : localtime(&secs);
+  if (tm == NULL) return false;
+  *out = *tm;
+  return true;
+}
+
+#define DT_FIELD_METHOD(fn, expr)                                          \
+  static bool fn(Value receiver, int argCount, Value* args, Value* result) { \
+    struct tm tm;                                                          \
+    if (!dtBreak(receiver, &tm)) { runtimeError("invalid DateTime."); return false; } \
+    *result = INT_VAL((int64_t)(expr));                                    \
+    return true;                                                           \
+  }
+DT_FIELD_METHOD(dtYearNative, tm.tm_year + 1900)
+DT_FIELD_METHOD(dtMonthNative, tm.tm_mon + 1)
+DT_FIELD_METHOD(dtDayNative, tm.tm_mday)
+DT_FIELD_METHOD(dtHourNative, tm.tm_hour)
+DT_FIELD_METHOD(dtMinuteNative, tm.tm_min)
+DT_FIELD_METHOD(dtSecondNative, tm.tm_sec)
+DT_FIELD_METHOD(dtWeekdayNative, tm.tm_wday)
+#undef DT_FIELD_METHOD
+
+static bool dtTimestampNative(Value receiver, int argCount, Value* args,
+                              Value* result) {
+  int64_t ms; bool utc;
+  if (!dtGet(receiver, &ms, &utc)) { runtimeError("invalid DateTime."); return false; }
+  *result = INT_VAL(ms / 1000);
+  return true;
+}
+
+static bool dtEpochMillisNative(Value receiver, int argCount, Value* args,
+                                Value* result) {
+  int64_t ms; bool utc;
+  if (!dtGet(receiver, &ms, &utc)) { runtimeError("invalid DateTime."); return false; }
+  *result = INT_VAL(ms);
+  return true;
+}
+
+static bool dtFormatNative(Value receiver, int argCount, Value* args,
+                           Value* result) {
+  if (!IS_STRING(args[0])) { runtimeError("format() expects a format string."); return false; }
+  struct tm tm;
+  if (!dtBreak(receiver, &tm)) { runtimeError("invalid DateTime."); return false; }
+  char buf[256];
+  size_t len = strftime(buf, sizeof(buf), AS_CSTRING(args[0]), &tm);
+  *result = OBJ_VAL(copyString(buf, (int)len));
+  return true;
+}
+
+static bool dtToStringNative(Value receiver, int argCount, Value* args,
+                             Value* result) {
+  struct tm tm;
+  if (!dtBreak(receiver, &tm)) { runtimeError("invalid DateTime."); return false; }
+  char buf[64];
+  size_t len = strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm);
+  *result = OBJ_VAL(copyString(buf, (int)len));
+  return true;
+}
+
+static bool dtAddNative(Value receiver, int argCount, Value* args,
+                        Value* result) {
+  int64_t ms; bool utc;
+  if (!dtGet(receiver, &ms, &utc)) { runtimeError("invalid DateTime."); return false; }
+  if (!isInstanceOf(args[0], durationClass)) {
+    runtimeError("add() expects a Duration.");
+    return false;
+  }
+  int64_t secs;
+  durGet(args[0], &secs);
+  *result = makeDateTime(ms + secs * 1000, utc);
+  return true;
+}
+
+static bool dtSubNative(Value receiver, int argCount, Value* args,
+                        Value* result) {
+  int64_t ms; bool utc;
+  if (!dtGet(receiver, &ms, &utc)) { runtimeError("invalid DateTime."); return false; }
+  if (isInstanceOf(args[0], durationClass)) {
+    int64_t secs;
+    durGet(args[0], &secs);
+    *result = makeDateTime(ms - secs * 1000, utc);
+    return true;
+  }
+  if (isInstanceOf(args[0], dateTimeClass)) {
+    int64_t oms; bool ou;
+    dtGet(args[0], &oms, &ou);
+    *result = makeDuration((ms - oms) / 1000);
+    return true;
+  }
+  runtimeError("sub() expects a Duration or DateTime.");
+  return false;
+}
+
+static bool dtCompareToNative(Value receiver, int argCount, Value* args,
+                              Value* result) {
+  int64_t ms; bool utc;
+  if (!dtGet(receiver, &ms, &utc)) { runtimeError("invalid DateTime."); return false; }
+  if (!isInstanceOf(args[0], dateTimeClass)) {
+    runtimeError("compareTo() expects a DateTime.");
+    return false;
+  }
+  int64_t oms; bool ou;
+  dtGet(args[0], &oms, &ou);
+  *result = INT_VAL(ms < oms ? -1 : (ms > oms ? 1 : 0));
+  return true;
+}
+
+static bool dtIsBeforeNative(Value receiver, int argCount, Value* args,
+                             Value* result) {
+  int64_t ms; bool utc;
+  if (!dtGet(receiver, &ms, &utc)) { runtimeError("invalid DateTime."); return false; }
+  if (!isInstanceOf(args[0], dateTimeClass)) {
+    runtimeError("isBefore() expects a DateTime.");
+    return false;
+  }
+  int64_t oms; bool ou;
+  dtGet(args[0], &oms, &ou);
+  *result = BOOL_VAL(ms < oms);
+  return true;
+}
+
+static bool dtIsAfterNative(Value receiver, int argCount, Value* args,
+                            Value* result) {
+  int64_t ms; bool utc;
+  if (!dtGet(receiver, &ms, &utc)) { runtimeError("invalid DateTime."); return false; }
+  if (!isInstanceOf(args[0], dateTimeClass)) {
+    runtimeError("isAfter() expects a DateTime.");
+    return false;
+  }
+  int64_t oms; bool ou;
+  dtGet(args[0], &oms, &ou);
+  *result = BOOL_VAL(ms > oms);
+  return true;
+}
+
+static bool durSecondsNative(Value receiver, int argCount, Value* args,
+                             Value* result) {
+  int64_t s;
+  if (!durGet(receiver, &s)) { runtimeError("invalid Duration."); return false; }
+  *result = INT_VAL(s);
+  return true;
+}
+
+static bool durToStringNative(Value receiver, int argCount, Value* args,
+                              Value* result) {
+  int64_t s;
+  if (!durGet(receiver, &s)) { runtimeError("invalid Duration."); return false; }
+  char buf[48];
+  int n = snprintf(buf, sizeof(buf), "Duration(%llds)", (long long)s);
+  *result = OBJ_VAL(copyString(buf, n));
+  return true;
+}
+
+/* Reads up to maxDigits decimal digits; returns false if none present. */
+static bool readIntField(const char** p, int maxDigits, long* out) {
+  const char* s = *p;
+  long v = 0;
+  int n = 0;
+  while (n < maxDigits && *s >= '0' && *s <= '9') {
+    v = v * 10 + (*s - '0');
+    s++;
+    n++;
+  }
+  if (n == 0) return false;
+  *out = v;
+  *p = s;
+  return true;
+}
+
+/* Compact strptime supporting %Y %y %m %d %H %M %S %% and literal chars.
+ * A space in the format matches any run of spaces. */
+static bool miniStrptime(const char* s, const char* fmt, struct tm* out) {
+  memset(out, 0, sizeof(*out));
+  out->tm_mday = 1;
+  out->tm_isdst = -1;
+  const char* p = s;
+  while (*fmt) {
+    if (*fmt == '%') {
+      fmt++;
+      long val;
+      switch (*fmt) {
+        case 'Y': if (!readIntField(&p, 4, &val)) return false; out->tm_year = (int)val - 1900; break;
+        case 'y': if (!readIntField(&p, 2, &val)) return false; out->tm_year = (int)val + (val < 69 ? 100 : 0); break;
+        case 'm': if (!readIntField(&p, 2, &val)) return false; out->tm_mon = (int)val - 1; break;
+        case 'd': if (!readIntField(&p, 2, &val)) return false; out->tm_mday = (int)val; break;
+        case 'H': if (!readIntField(&p, 2, &val)) return false; out->tm_hour = (int)val; break;
+        case 'M': if (!readIntField(&p, 2, &val)) return false; out->tm_min = (int)val; break;
+        case 'S': if (!readIntField(&p, 2, &val)) return false; out->tm_sec = (int)val; break;
+        case '%': if (*p != '%') return false; p++; break;
+        default: return false;
+      }
+      fmt++;
+    } else if (*fmt == ' ') {
+      while (*p == ' ') p++;
+      fmt++;
+    } else {
+      if (*p != *fmt) return false;
+      p++;
+      fmt++;
+    }
+  }
+  return true;
+}
+
+static Value datetimeNowNative(int argCount, Value* args) {
+  return makeDateTime(nowMillis(), false);
+}
+
+static Value datetimeUtcNowNative(int argCount, Value* args) {
+  return makeDateTime(nowMillis(), true);
+}
+
+static Value datetimeFromTimestampNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) {
+    runtimeError("datetime.fromTimestamp() expects a number (seconds).");
+    return NIL_VAL;
+  }
+  return makeDateTime((int64_t)(AS_DOUBLE_COERCE(args[0]) * 1000.0), false);
+}
+
+static Value datetimeFromPartsNative(int argCount, Value* args) {
+  if (argCount != 6) {
+    runtimeError("datetime.fromParts() expects (year,month,day,hour,minute,second).");
+    return NIL_VAL;
+  }
+  for (int i = 0; i < 6; i++) {
+    if (!IS_INT(args[i])) {
+      runtimeError("datetime.fromParts() expects integer arguments.");
+      return NIL_VAL;
+    }
+  }
+  struct tm tm;
+  memset(&tm, 0, sizeof(tm));
+  tm.tm_year = (int)AS_INT(args[0]) - 1900;
+  tm.tm_mon = (int)AS_INT(args[1]) - 1;
+  tm.tm_mday = (int)AS_INT(args[2]);
+  tm.tm_hour = (int)AS_INT(args[3]);
+  tm.tm_min = (int)AS_INT(args[4]);
+  tm.tm_sec = (int)AS_INT(args[5]);
+  tm.tm_isdst = -1;
+  time_t t = mktime(&tm);
+  if (t == (time_t)-1) {
+    raiseError(vm.valueErrorClass, "datetime.fromParts(): invalid date.");
+    return NIL_VAL;
+  }
+  return makeDateTime((int64_t)t * 1000, false);
+}
+
+static Value datetimeParseNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_STRING(args[0]) || !IS_STRING(args[1])) {
+    runtimeError("datetime.parse() expects (string, format).");
+    return NIL_VAL;
+  }
+  struct tm tm;
+  if (!miniStrptime(AS_CSTRING(args[0]), AS_CSTRING(args[1]), &tm)) {
+    raiseError(vm.valueErrorClass, "datetime.parse(): input does not match format.");
+    return NIL_VAL;
+  }
+  time_t t = mktime(&tm);
+  if (t == (time_t)-1) {
+    raiseError(vm.valueErrorClass, "datetime.parse(): invalid date.");
+    return NIL_VAL;
+  }
+  return makeDateTime((int64_t)t * 1000, false);
+}
+
+#define DT_DURATION_BUILDER(fn, unitName, factor)                          \
+  static Value fn(int argCount, Value* args) {                             \
+    if (argCount != 1 || !IS_INT(args[0])) {                               \
+      runtimeError("datetime." unitName "() expects an integer.");         \
+      return NIL_VAL;                                                      \
+    }                                                                      \
+    return makeDuration(AS_INT(args[0]) * (factor));                       \
+  }
+DT_DURATION_BUILDER(datetimeSecondsNative, "seconds", 1)
+DT_DURATION_BUILDER(datetimeMinutesNative, "minutes", 60)
+DT_DURATION_BUILDER(datetimeHoursNative, "hours", 3600)
+DT_DURATION_BUILDER(datetimeDaysNative, "days", 86400)
+DT_DURATION_BUILDER(datetimeDurationNative, "duration", 1)
+#undef DT_DURATION_BUILDER
+
+/* --------------------------------------------------------------- logging -- */
+
+static int logThreshold = 20; /* INFO */
+static FILE* logStream = NULL; /* NULL => stderr */
+static bool logStreamOwned = false;
+
+static const char* logLevelName(int lvl) {
+  if (lvl >= 50) return "CRITICAL";
+  if (lvl >= 40) return "ERROR";
+  if (lvl >= 30) return "WARN";
+  if (lvl >= 20) return "INFO";
+  return "DEBUG";
+}
+
+static void logEmit(int level, const char* msg) {
+  if (level < logThreshold) return;
+  FILE* out = logStream ? logStream : stderr;
+  time_t t = time(NULL);
+  struct tm* tm = localtime(&t);
+  char ts[32];
+  if (tm != NULL)
+    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm);
+  else
+    ts[0] = '\0';
+  fprintf(out, "%s %s %s\n", ts, logLevelName(level), msg);
+  fflush(out);
+}
+
+#define LOG_LEVEL_FN(fn, level, name)                                      \
+  static Value fn(int argCount, Value* args) {                             \
+    if (argCount != 1 || !IS_STRING(args[0])) {                            \
+      runtimeError("logging." name "() expects a string.");                \
+      return NIL_VAL;                                                      \
+    }                                                                      \
+    logEmit((level), AS_CSTRING(args[0]));                                 \
+    return NIL_VAL;                                                        \
+  }
+LOG_LEVEL_FN(loggingDebugNative, 10, "debug")
+LOG_LEVEL_FN(loggingInfoNative, 20, "info")
+LOG_LEVEL_FN(loggingWarnNative, 30, "warn")
+LOG_LEVEL_FN(loggingErrorNative, 40, "error")
+LOG_LEVEL_FN(loggingCriticalNative, 50, "critical")
+#undef LOG_LEVEL_FN
+
+static Value loggingLogNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_INT(args[0]) || !IS_STRING(args[1])) {
+    runtimeError("logging.log() expects (level, message).");
+    return NIL_VAL;
+  }
+  logEmit((int)AS_INT(args[0]), AS_CSTRING(args[1]));
+  return NIL_VAL;
+}
+
+static Value loggingSetLevelNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_INT(args[0])) {
+    runtimeError("logging.setLevel() expects an integer level.");
+    return NIL_VAL;
+  }
+  logThreshold = (int)AS_INT(args[0]);
+  return NIL_VAL;
+}
+
+static Value loggingSetOutputNative(int argCount, Value* args) {
+  if (argCount != 1) {
+    runtimeError("logging.setOutput() expects 1 argument.");
+    return NIL_VAL;
+  }
+  if (logStreamOwned && logStream) fclose(logStream);
+  logStream = NULL;
+  logStreamOwned = false;
+  if (IS_NIL(args[0])) return NIL_VAL;
+  if (!IS_STRING(args[0])) {
+    runtimeError("logging.setOutput() expects a path string or nil.");
+    return NIL_VAL;
+  }
+  FILE* f = fopen(AS_CSTRING(args[0]), "a");
+  if (f == NULL) {
+    raiseError(vm.ioErrorClass, "logging.setOutput(): cannot open '%s'.",
+               AS_CSTRING(args[0]));
+    return NIL_VAL;
+  }
+  logStream = f;
+  logStreamOwned = true;
+  return NIL_VAL;
+}
+
+/* ------------------------------------------------------------ statistics -- */
+
+static int cmpDouble(const void* x, const void* y) {
+  double a = *(const double*)x, b = *(const double*)y;
+  return (a > b) - (a < b);
+}
+
+/* Extracts a numeric array into a freshly allocated double[]; caller frees
+ * with FREE_ARRAY(double, buf, *count). Raises on empty / non-numeric. */
+static bool statNums(Value v, double** out, int* count) {
+  if (!IS_ARRAY(v)) {
+    runtimeError("statistics: argument must be an array.");
+    return false;
+  }
+  ObjArray* a = AS_ARRAY(v);
+  int n = a->elements.count;
+  if (n == 0) {
+    raiseError(vm.valueErrorClass, "statistics: empty data set.");
+    return false;
+  }
+  double* buf = ALLOCATE(double, n);
+  for (int i = 0; i < n; i++) {
+    Value e = a->elements.values[i];
+    if (!IS_NUMBER(e)) {
+      FREE_ARRAY(double, buf, n);
+      raiseError(vm.typeErrorClass, "statistics: non-numeric element.");
+      return false;
+    }
+    buf[i] = AS_DOUBLE_COERCE(e);
+  }
+  *out = buf;
+  *count = n;
+  return true;
+}
+
+static Value statMeanNative(int argCount, Value* args) {
+  double* d; int n;
+  if (!statNums(args[0], &d, &n)) return NIL_VAL;
+  double sum = 0;
+  for (int i = 0; i < n; i++) sum += d[i];
+  double r = sum / n;
+  FREE_ARRAY(double, d, n);
+  return DOUBLE_VAL(r);
+}
+
+static Value statMedianNative(int argCount, Value* args) {
+  double* d; int n;
+  if (!statNums(args[0], &d, &n)) return NIL_VAL;
+  qsort(d, n, sizeof(double), cmpDouble);
+  double r = (n % 2) ? d[n / 2] : (d[n / 2 - 1] + d[n / 2]) / 2.0;
+  FREE_ARRAY(double, d, n);
+  return DOUBLE_VAL(r);
+}
+
+static Value statModeNative(int argCount, Value* args) {
+  double* d; int n;
+  if (!statNums(args[0], &d, &n)) return NIL_VAL;
+  qsort(d, n, sizeof(double), cmpDouble);
+  double best = d[0];
+  int bestRun = 1, run = 1;
+  for (int i = 1; i < n; i++) {
+    run = (d[i] == d[i - 1]) ? run + 1 : 1;
+    if (run > bestRun) { bestRun = run; best = d[i]; }
+  }
+  FREE_ARRAY(double, d, n);
+  return DOUBLE_VAL(best);
+}
+
+static Value statVarianceImpl(Value arg, bool sample) {
+  double* d; int n;
+  if (!statNums(arg, &d, &n)) return NIL_VAL;
+  if (sample && n < 2) {
+    FREE_ARRAY(double, d, n);
+    raiseError(vm.valueErrorClass,
+               "statistics: variance requires at least two data points.");
+    return NIL_VAL;
+  }
+  double sum = 0;
+  for (int i = 0; i < n; i++) sum += d[i];
+  double mean = sum / n;
+  double sq = 0;
+  for (int i = 0; i < n; i++) sq += (d[i] - mean) * (d[i] - mean);
+  double r = sq / (sample ? (n - 1) : n);
+  FREE_ARRAY(double, d, n);
+  return DOUBLE_VAL(r);
+}
+
+static Value statVarianceNative(int argCount, Value* args) {
+  return statVarianceImpl(args[0], true);
+}
+static Value statPVarianceNative(int argCount, Value* args) {
+  return statVarianceImpl(args[0], false);
+}
+static Value statStdevNative(int argCount, Value* args) {
+  Value v = statVarianceImpl(args[0], true);
+  return IS_DOUBLE(v) ? DOUBLE_VAL(sqrt(AS_DOUBLE_COERCE(v))) : v;
+}
+static Value statPStdevNative(int argCount, Value* args) {
+  Value v = statVarianceImpl(args[0], false);
+  return IS_DOUBLE(v) ? DOUBLE_VAL(sqrt(AS_DOUBLE_COERCE(v))) : v;
+}
+
+static Value statMinMaxImpl(Value arg, bool wantMax) {
+  double* d; int n;
+  if (!statNums(arg, &d, &n)) return NIL_VAL;
+  double r = d[0];
+  for (int i = 1; i < n; i++)
+    if (wantMax ? (d[i] > r) : (d[i] < r)) r = d[i];
+  FREE_ARRAY(double, d, n);
+  return DOUBLE_VAL(r);
+}
+static Value statMinNative(int argCount, Value* args) {
+  return statMinMaxImpl(args[0], false);
+}
+static Value statMaxNative(int argCount, Value* args) {
+  return statMinMaxImpl(args[0], true);
+}
+
+static Value statRangeNative(int argCount, Value* args) {
+  double* d; int n;
+  if (!statNums(args[0], &d, &n)) return NIL_VAL;
+  double lo = d[0], hi = d[0];
+  for (int i = 1; i < n; i++) {
+    if (d[i] < lo) lo = d[i];
+    if (d[i] > hi) hi = d[i];
+  }
+  FREE_ARRAY(double, d, n);
+  return DOUBLE_VAL(hi - lo);
+}
+
+static Value statQuantileNative(int argCount, Value* args) {
+  if (argCount != 2 || !IS_NUMBER(args[1])) {
+    runtimeError("statistics.quantile() expects (array, q).");
+    return NIL_VAL;
+  }
+  double q = AS_DOUBLE_COERCE(args[1]);
+  if (q < 0.0 || q > 1.0) {
+    raiseError(vm.valueErrorClass, "statistics.quantile(): q must be in [0, 1].");
+    return NIL_VAL;
+  }
+  double* d; int n;
+  if (!statNums(args[0], &d, &n)) return NIL_VAL;
+  qsort(d, n, sizeof(double), cmpDouble);
+  double pos = q * (n - 1);
+  int lo = (int)pos;
+  double frac = pos - lo;
+  double r = (lo + 1 < n) ? d[lo] + frac * (d[lo + 1] - d[lo]) : d[lo];
+  FREE_ARRAY(double, d, n);
+  return DOUBLE_VAL(r);
+}
+
 void registerBuiltins(void) {
   vm.arrayMethods = NULL;
   vm.arrayMethods = newClass(copyString("Array", 5));
@@ -4715,6 +5888,114 @@ void registerBuiltins(void) {
   defineNativeMethod(vm.regexMethods, "replace", regexReplaceNative, 2);
   defineNativeMethod(vm.regexMethods, "replaceAll", regexReplaceAllNative, 2);
   defineNativeMethod(vm.regexMethods, "split", regexSplitNative, 1);
+
+  // --- base64 module ---
+  ObjModule* base64Module = registerBuiltinModule("base64");
+  defineModuleNative(base64Module, "encode", base64EncodeNative);
+  defineModuleNative(base64Module, "decode", base64DecodeNative);
+  defineModuleNative(base64Module, "encodeUrl", base64EncodeUrlNative);
+  defineModuleNative(base64Module, "decodeUrl", base64DecodeNative);
+
+  // --- path module ---
+  ObjModule* pathModule = registerBuiltinModule("path");
+  defineModuleNative(pathModule, "join", pathJoinNative);
+  defineModuleNative(pathModule, "dirname", pathDirnameNative);
+  defineModuleNative(pathModule, "basename", pathBasenameNative);
+  defineModuleNative(pathModule, "extname", pathExtnameNative);
+  defineModuleNative(pathModule, "splitext", pathSplitextNative);
+  defineModuleNative(pathModule, "split", pathSplitNative);
+  defineModuleNative(pathModule, "normalize", pathNormalizeNative);
+  defineModuleNative(pathModule, "isAbsolute", pathIsAbsoluteNative);
+  defineModuleNative(pathModule, "absolute", pathAbsoluteNative);
+  {
+    char sep[2] = {PATH_SEP, '\0'};
+    defineModuleValue(pathModule, "sep", OBJ_VAL(copyString(sep, 1)));
+  }
+
+  // --- random module (shares the RNG with math.random/math.seed) ---
+  ObjModule* randomModule = registerBuiltinModule("random");
+  defineModuleNative(randomModule, "int", randIntNative);
+  defineModuleNative(randomModule, "float", randFloatNative);
+  defineModuleNative(randomModule, "bool", randBoolNative);
+  defineModuleNative(randomModule, "choice", randChoiceNative);
+  defineModuleNative(randomModule, "shuffle", randShuffleNative);
+  defineModuleNative(randomModule, "sample", randSampleNative);
+  defineModuleNative(randomModule, "bytes", randBytesNative);
+  defineModuleNative(randomModule, "seed", seedNative);
+
+  // --- uuid module ---
+  ObjModule* uuidModule = registerBuiltinModule("uuid");
+  defineModuleNative(uuidModule, "v4", uuidV4Native);
+  defineModuleNative(uuidModule, "v7", uuidV7Native);
+  defineModuleNative(uuidModule, "zero", uuidNilNative);
+
+  // --- datetime module (DateTime / Duration instance classes) ---
+  dateTimeClass = newClass(copyString("DateTime", 8));
+  defineNativeMethod(dateTimeClass, "year", dtYearNative, 0);
+  defineNativeMethod(dateTimeClass, "month", dtMonthNative, 0);
+  defineNativeMethod(dateTimeClass, "day", dtDayNative, 0);
+  defineNativeMethod(dateTimeClass, "hour", dtHourNative, 0);
+  defineNativeMethod(dateTimeClass, "minute", dtMinuteNative, 0);
+  defineNativeMethod(dateTimeClass, "second", dtSecondNative, 0);
+  defineNativeMethod(dateTimeClass, "weekday", dtWeekdayNative, 0);
+  defineNativeMethod(dateTimeClass, "timestamp", dtTimestampNative, 0);
+  defineNativeMethod(dateTimeClass, "epochMillis", dtEpochMillisNative, 0);
+  defineNativeMethod(dateTimeClass, "format", dtFormatNative, 1);
+  defineNativeMethod(dateTimeClass, "add", dtAddNative, 1);
+  defineNativeMethod(dateTimeClass, "sub", dtSubNative, 1);
+  defineNativeMethod(dateTimeClass, "compareTo", dtCompareToNative, 1);
+  defineNativeMethod(dateTimeClass, "isBefore", dtIsBeforeNative, 1);
+  defineNativeMethod(dateTimeClass, "isAfter", dtIsAfterNative, 1);
+  defineNativeMethod(dateTimeClass, "__toString__", dtToStringNative, 0);
+
+  durationClass = newClass(copyString("Duration", 8));
+  defineNativeMethod(durationClass, "seconds", durSecondsNative, 0);
+  defineNativeMethod(durationClass, "__toString__", durToStringNative, 0);
+
+  ObjModule* datetimeModule = registerBuiltinModule("datetime");
+  defineModuleNative(datetimeModule, "now", datetimeNowNative);
+  defineModuleNative(datetimeModule, "utcNow", datetimeUtcNowNative);
+  defineModuleNative(datetimeModule, "fromTimestamp",
+                     datetimeFromTimestampNative);
+  defineModuleNative(datetimeModule, "fromParts", datetimeFromPartsNative);
+  defineModuleNative(datetimeModule, "parse", datetimeParseNative);
+  defineModuleNative(datetimeModule, "seconds", datetimeSecondsNative);
+  defineModuleNative(datetimeModule, "minutes", datetimeMinutesNative);
+  defineModuleNative(datetimeModule, "hours", datetimeHoursNative);
+  defineModuleNative(datetimeModule, "days", datetimeDaysNative);
+  defineModuleNative(datetimeModule, "duration", datetimeDurationNative);
+  defineModuleValue(datetimeModule, "DateTime", OBJ_VAL(dateTimeClass));
+  defineModuleValue(datetimeModule, "Duration", OBJ_VAL(durationClass));
+
+  // --- logging module ---
+  ObjModule* loggingModule = registerBuiltinModule("logging");
+  defineModuleNative(loggingModule, "debug", loggingDebugNative);
+  defineModuleNative(loggingModule, "info", loggingInfoNative);
+  defineModuleNative(loggingModule, "warn", loggingWarnNative);
+  defineModuleNative(loggingModule, "error", loggingErrorNative);
+  defineModuleNative(loggingModule, "critical", loggingCriticalNative);
+  defineModuleNative(loggingModule, "log", loggingLogNative);
+  defineModuleNative(loggingModule, "setLevel", loggingSetLevelNative);
+  defineModuleNative(loggingModule, "setOutput", loggingSetOutputNative);
+  defineModuleConstant(loggingModule, "DEBUG", INT_VAL(10));
+  defineModuleConstant(loggingModule, "INFO", INT_VAL(20));
+  defineModuleConstant(loggingModule, "WARN", INT_VAL(30));
+  defineModuleConstant(loggingModule, "ERROR", INT_VAL(40));
+  defineModuleConstant(loggingModule, "CRITICAL", INT_VAL(50));
+
+  // --- statistics module ---
+  ObjModule* statsModule = registerBuiltinModule("statistics");
+  defineModuleNative(statsModule, "mean", statMeanNative);
+  defineModuleNative(statsModule, "median", statMedianNative);
+  defineModuleNative(statsModule, "mode", statModeNative);
+  defineModuleNative(statsModule, "variance", statVarianceNative);
+  defineModuleNative(statsModule, "stdev", statStdevNative);
+  defineModuleNative(statsModule, "pvariance", statPVarianceNative);
+  defineModuleNative(statsModule, "pstdev", statPStdevNative);
+  defineModuleNative(statsModule, "min", statMinNative);
+  defineModuleNative(statsModule, "max", statMaxNative);
+  defineModuleNative(statsModule, "range", statRangeNative);
+  defineModuleNative(statsModule, "quantile", statQuantileNative);
 
   // Seed the deterministic RNG used by math.random()/math.seed() from the clock.
   rngState = (uint64_t)time(NULL) ^ 0x9E3779B97F4A7C15ULL;
